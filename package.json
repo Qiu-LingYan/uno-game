@@ -1,0 +1,21 @@
+{
+  "name": "uno-game",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "node --test tests/*.test.js",
+    "start": "node server/index.js",
+    "smoke": "node server/smoke-test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.7.5",
+    "vite": "^5.4.0"
+  }
+}

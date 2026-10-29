@@ -44,6 +44,7 @@ export function newGame(playerIds) {
     direction: 1,
     pendingDraw: 0,
     winner: null,
+    unoCalled: {},
   };
 }
 
@@ -61,6 +62,7 @@ export function playCard(state, playerId, cardIndex, chosenColor) {
   if (card.color === "wild" && chosenColor && !COLORS.includes(chosenColor)) return { ok: false, error: "bad color" };
 
   hand.splice(cardIndex, 1);
+  state.unoCalled[playerId] = false;
   state.discard.push(card);
   state.activeColor = card.color === "wild" ? chosenColor : card.color;
 
@@ -78,6 +80,13 @@ export function playCard(state, playerId, cardIndex, chosenColor) {
 export function advanceTurn(state, steps = 1) {
   const n = state.players.length;
   state.turn = ((state.turn + state.direction * steps) % n + n) % n;
+}
+
+export function callUno(state, playerId) {
+  if (!state.players.includes(playerId)) return { ok: false, error: "not in game" };
+  if (state.hands[playerId].length !== 1) return { ok: false, error: "UNO can only be called with one card" };
+  state.unoCalled[playerId] = true;
+  return { ok: true };
 }
 
 // 摸牌（处理 pendingDraw 累积）
@@ -117,5 +126,6 @@ export function publicState(state, forPlayer) {
     pendingDraw: state.pendingDraw,
     drawPileCount: state.drawPile.length,
     winner: state.winner,
+    unoCalled: state.unoCalled,
   };
 }

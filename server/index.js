@@ -1,7 +1,7 @@
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
-import { newGame, playCard, drawCards, publicState } from "./game.js";
+import { newGame, playCard, drawCards, callUno, publicState } from "./game.js";
 
 const PORT = process.env.PORT || 3001;
 const app = express();
@@ -69,6 +69,15 @@ io.on("connection", (socket) => {
     const r = drawCards(room.state, socket.id);
     if (!r.ok) return socket.emit("error-msg", { error: r.error });
     broadcast(room, code);
+  });
+
+  socket.on("callUno", ({ code }, cb) => {
+    const room = rooms.get(code);
+    if (!room?.state) return cb?.({ ok: false, error: "game not started" });
+    const result = callUno(room.state, socket.id);
+    if (!result.ok) return cb?.(result);
+    broadcast(room, code);
+    cb?.({ ok: true });
   });
 
   socket.on("disconnect", () => {

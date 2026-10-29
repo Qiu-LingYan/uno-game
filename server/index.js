@@ -78,7 +78,9 @@ app.patch("/api/profile", (req, res) => {
 /** rooms: { code: { players: [{id,name,clientId,disconnectedAt}], state, started, lastActivity } } */
 const rooms = new Map();
 const ROOM_TTL_MS = 60 * 60 * 1000;
-const RECONNECT_GRACE_MS = 30 * 1000;
+// 断线座位保留 1 小时（与房间 TTL 一致）：手机切后台/锁屏断连后，1 小时内回来仍能恢复座位，
+// 之前 30 秒宽限导致"几分钟没操作房间就没了"
+const RECONNECT_GRACE_MS = 60 * 60 * 1000;
 
 function touch(room) { room.lastActivity = Date.now(); }
 function playerClientId(socketId) { return io.sockets.sockets.get(socketId)?.data.clientId; }

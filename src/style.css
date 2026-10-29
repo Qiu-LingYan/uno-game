@@ -15,3 +15,9 @@
 .stackWarn{text-align:center;color:#f4c86a;font-size:12px;margin:8px 0}
 .catchButton{height:44px;padding:0 22px;border:1px solid #ffd843;border-radius:12px;background:#3a3210;color:#ffd843;font-weight:800;cursor:pointer;font-size:14px;animation:catchPulse 1s infinite}
 @keyframes catchPulse{0%,100%{box-shadow:0 0 0 0 #ffd84355}50%{box-shadow:0 0 14px 4px #ffd84344}}
+.modalBackdrop{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:#000000b3;backdrop-filter:blur(3px)}
+.colorModal{padding:26px 30px;border:1px solid #373941;border-radius:18px;background:#191a1f;box-shadow:0 30px 80px #000c;animation:modalIn .18s ease-out;text-align:center}
+.colorModal p{margin:0 0 16px;font-size:14px;color:#f7f5f2}
+.colorModal .pick{padding:14px 20px}
+.colorModal .pickCancel{margin-top:16px}
+@keyframes modalIn{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:scale(1)}}

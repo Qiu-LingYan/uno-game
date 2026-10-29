@@ -1,7 +1,7 @@
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
-import { newGame, playCard, drawCards, callUno, publicState } from "./game.js";
+import { newGame, playCard, drawCards, callUno, catchUno, keepDrawn, publicState } from "./game.js";
 import { prepareRegistration, confirmRegistration, login, getUser, logout, profile, updateNickname, recordGame } from "./store.js";
 
 const PORT = process.env.PORT || 3001;
@@ -75,17 +75,41 @@ app.patch("/api/profile", (req, res) => {
   res.json({ ok: true, nickname: result.nickname });
 });
 
-/** rooms: { code: { players: [{id,name}], state, started } } */
+/** rooms: { code: { players: [{id,name,clientId,disconnectedAt}], state, started, lastActivity } } */
 const rooms = new Map();
 const ROOM_TTL_MS = 60 * 60 * 1000;
+const RECONNECT_GRACE_MS = 30 * 1000;
 
 function touch(room) { room.lastActivity = Date.now(); }
+function playerClientId(socketId) { return io.sockets.sockets.get(socketId)?.data.clientId; }
 
-// 每分钟清理一次：1 小时内没有任何加入或操作的房间自动解散
+function findPlayerByUserId(room, userId) {
+  if (!userId) return -1;
+  return room.players.findIndex(p => p.userId === userId);
+}
+
+function isWithinGrace(player) {
+  return player.disconnectedAt && Date.now() - player.disconnectedAt <= RECONNECT_GRACE_MS;
+}
+
+// 每分钟清理一次：1 小时内没有任何加入或操作的房间自动解散；并清理超出宽限期的断线玩家
 setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms) {
-    if (now - (room.lastActivity || 0) > ROOM_TTL_MS) rooms.delete(code);
+    if (now - (room.lastActivity || 0) > ROOM_TTL_MS) {
+      rooms.delete(code);
+      continue;
+    }
+    // 清理超出宽限期的断线玩家
+    for (let i = room.players.length - 1; i >= 0; i--) {
+      const p = room.players[i];
+      if (p.disconnectedAt && now - p.disconnectedAt > RECONNECT_GRACE_MS) {
+        room.players.splice(i, 1);
+        touch(room);
+      }
+    }
+    // 房间空了也删掉
+    if (room.players.length === 0) rooms.delete(code);
   }
 }, 60 * 1000).unref();
 
@@ -96,7 +120,9 @@ function saveFinishedGame(room, code) {
 }
 
 io.use((socket, next) => {
-  socket.data.user = getUser(socket.handshake.auth?.token);
+  const auth = socket.handshake.auth || {};
+  socket.data.user = getUser(auth.token);
+  socket.data.clientId = auth.clientId;
   next();
 });
 
@@ -114,9 +140,10 @@ function broadcast(room, code) {
   }
 }
 
-function removePlayer(socketId, code, room) {
+function removePlayer(socketId, code, room, { explicitLeave = false } = {}) {
   const i = room.players.findIndex(p => p.id === socketId);
   if (i === -1) return false;
+  const player = room.players[i];
   if (room.started && !room.state.winner) {
     room.state.winner = room.players.find(p => p.id !== socketId)?.id || null;
     if (room.state.winner) saveFinishedGame(room, code);
@@ -124,7 +151,14 @@ function removePlayer(socketId, code, room) {
     room.started = false;
     room.state = null;
   }
-  room.players.splice(i, 1);
+  if (explicitLeave) {
+    // 主动离开：彻底移除
+    room.players.splice(i, 1);
+  } else {
+    // 断线：标记为断线，保留座位供宽限期内重连
+    player.disconnectedAt = Date.now();
+    player.id = socketId;
+  }
   touch(room);
   broadcast(room, code);
   return true;
@@ -132,28 +166,96 @@ function removePlayer(socketId, code, room) {
 
 io.on("connection", (socket) => {
   if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
-  socket.on("createRoom", ({ name }, cb) => {
-    const code = genCode();
+  socket.on("createRoom", ({ name, code: preferredCode }, cb) => {
+    const upper = (preferredCode || "").toUpperCase();
+    const clientId = socket.data.clientId;
+    const userId = socket.data.user?.id;
+
+    // 如果提供了房间码且存在，尝试重连
+    if (upper) {
+      const existingRoom = rooms.get(upper);
+      if (existingRoom) {
+        const existingIdx = findPlayerByUserId(existingRoom, userId);
+        if (existingIdx !== -1 && (existingRoom.players[existingIdx].id === socket.id || isWithinGrace(existingRoom.players[existingIdx]))) {
+          const player = existingRoom.players[existingIdx];
+          player.id = socket.id;
+          player.disconnectedAt = null;
+          if (socket.data.user?.nickname) player.name = socket.data.user.nickname;
+          if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
+          socket.join(upper);
+          touch(existingRoom);
+          broadcast(existingRoom, upper);
+          return cb?.({ ok: true, code: upper });
+        }
+        // 房间存在但不是原房主重连，返回错误
+        return cb?.({ ok: false, error: "房间码已存在" });
+      }
+    }
+
+    // 创建新房间
+    let code = upper || genCode();
+    if (rooms.has(code)) return cb?.({ ok: false, error: "房间码已存在" });
+
     const roomName = socket.data.user?.nickname || name || "玩家1";
-    rooms.set(code, { players: [{ id: socket.id, name: roomName }], state: null, started: false, lastActivity: Date.now() });
+    rooms.set(code, {
+      players: [{ id: socket.id, name: roomName, clientId, userId, disconnectedAt: null }],
+      state: null,
+      started: false,
+      lastActivity: Date.now()
+    });
     if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
     socket.join(code);
     cb?.({ ok: true, code });
     const room = rooms.get(code);
-    socket.emit("state", { room: code, players: rooms.get(code).players.map(x => x.name), started: false, handCounts: {}, turn: null });
+    socket.emit("state", { room: code, players: room.players.map(x => x.name), started: false, handCounts: {}, turn: null });
   });
 
   socket.on("joinRoom", ({ code, name }, cb) => {
-    const room = rooms.get((code || "").toUpperCase());
+    const upper = (code || "").toUpperCase();
+    const room = rooms.get(upper);
     if (!room) return cb?.({ ok: false, error: "房间不存在" });
+
+    const clientId = socket.data.clientId;
+    const userId = socket.data.user?.id;
+    const existingIdx = findPlayerByUserId(room, userId);
+    const sameSocketIdx = room.players.findIndex(player => player.id === socket.id);
+
+    // 已占座玩家优先处理（含中局断线宽限期内的重连恢复座位），不被"游戏已开始"拦截
+    if (existingIdx !== -1 || sameSocketIdx !== -1) {
+      const playerIdx = existingIdx !== -1 ? existingIdx : sameSocketIdx;
+      const player = room.players[playerIdx];
+      // 已在座位：同一 socket 再次加入仅确认成功；断线后则恢复原座位。
+      if (player.id === socket.id || isWithinGrace(player)) {
+        if (player.id !== socket.id) {
+          player.id = socket.id;
+          player.disconnectedAt = null;
+        }
+        if (socket.data.user?.nickname) player.name = socket.data.user.nickname;
+        if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
+        socket.join(upper);
+        touch(room);
+        broadcast(room, upper);
+        return cb?.({ ok: true, code: upper });
+      }
+      return cb?.({ ok: false, error: "该账号已在此房间" });
+    }
+
     if (room.started) return cb?.({ ok: false, error: "游戏已开始" });
     if (room.players.length >= 4) return cb?.({ ok: false, error: "房间已满" });
+
     touch(room);
-    room.players.push({ id: socket.id, name: socket.data.user?.nickname || name || `玩家${room.players.length + 1}` });
+    const newPlayer = {
+      id: socket.id,
+      name: socket.data.user?.nickname || name || `玩家${room.players.length + 1}`,
+      clientId,
+      userId,
+      disconnectedAt: null
+    };
+    room.players.push(newPlayer);
     if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
-    socket.join(code.toUpperCase());
-    cb?.({ ok: true, code: code.toUpperCase() });
-    broadcast(room, code.toUpperCase());
+    socket.join(upper);
+    cb?.({ ok: true, code: upper });
+    broadcast(room, upper);
   });
 
   socket.on("startGame", ({ code }, cb) => {
@@ -205,9 +307,30 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
+  socket.on("catchUno", ({ code }, cb) => {
+    const room = rooms.get(code);
+    if (!room?.state) return cb?.({ ok: false, error: "game not started" });
+    const result = catchUno(room.state, socket.id);
+    if (!result.ok) return cb?.(result);
+    touch(room);
+    broadcast(room, code);
+    cb?.({ ok: true, target: result.target });
+  });
+
+  socket.on("keepDrawn", ({ code }, cb) => {
+    const room = rooms.get(code);
+    if (!room?.state) return cb?.({ ok: false, error: "game not started" });
+    const result = keepDrawn(room.state, socket.id);
+    if (!result.ok) return cb?.(result);
+    touch(room);
+    broadcast(room, code);
+    cb?.({ ok: true });
+  });
+
   socket.on("leaveRoom", ({ code }, cb) => {
-    const room = rooms.get((code || "").toUpperCase());
-    if (room) { removePlayer(socket.id, code.toUpperCase(), room); socket.leave(code.toUpperCase()); }
+    const upper = (code || "").toUpperCase();
+    const room = rooms.get(upper);
+    if (room) { removePlayer(socket.id, upper, room, { explicitLeave: true }); socket.leave(upper); }
     cb?.({ ok: true });
   });
 

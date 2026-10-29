@@ -10,3 +10,8 @@
 .pick i{width:30px;height:30px;border-radius:50%;border:2px solid #f8f3e8}
 .pick.red i{background:#ff5062}.pick.yellow i{background:#ffd843}.pick.green i{background:#48d597}.pick.blue i{background:#4c9aff}
 .pickCancel{display:block;margin:12px auto 0;border:0;background:none;color:#85868e;cursor:pointer;font-size:12px}
+.cardButton.drawn .card{outline:3px solid #ffd843;outline-offset:2px}
+.drawnActions,.unoCatch{display:flex;justify-content:center;gap:10px;margin-top:10px}
+.stackWarn{text-align:center;color:#f4c86a;font-size:12px;margin:8px 0}
+.catchButton{height:44px;padding:0 22px;border:1px solid #ffd843;border-radius:12px;background:#3a3210;color:#ffd843;font-weight:800;cursor:pointer;font-size:14px;animation:catchPulse 1s infinite}
+@keyframes catchPulse{0%,100%{box-shadow:0 0 0 0 #ffd84355}50%{box-shadow:0 0 14px 4px #ffd84344}}

@@ -3,17 +3,36 @@ import { createRoot } from 'react-dom/client';
 import { io } from 'socket.io-client';
 import './style.css';
 
-const socket = io(import.meta.env.VITE_SOCKET_URL || undefined, { autoConnect: false, path: '/socket.io' });
+const socket = io(import.meta.env.VITE_SOCKET_URL || undefined, { autoConnect: false, path: '/socket.io', auth: callback => callback({ token: localStorage.getItem('uno-token') }) });
+const storedName = localStorage.getItem('uno-name') || '';
 const labels = { skip: '🚫', reverse: '🔄', draw2: '+2', wild: '变色', wild4: '+4' };
 const colors = { red: '#ff5062', yellow: '#ffd843', green: '#48d597', blue: '#4c9aff', wild: '#252936' };
 function App() {
-  const [name, setName] = useState('');
+  const [name, setName] = useState(storedName);
+  const [authMode, setAuthMode] = useState('login');
+  const [email, setEmail] = useState('');
+  const [username, setUsername] = useState('');
+  const [nickname, setNickname] = useState('');
+  const [password, setPassword] = useState('');
+  const [verifyCode, setVerifyCode] = useState('');
+  const [pendingEmail, setPendingEmail] = useState('');
+  const [user, setUser] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [showProfile, setShowProfile] = useState(false);
   const [codeInput, setCodeInput] = useState('');
   const [roomCode, setRoomCode] = useState('');
   const [game, setGame] = useState(null);
   const [error, setError] = useState('');
   const [connected, setConnected] = useState(false);
+  const api = async (path, options = {}) => {
+    const token = localStorage.getItem('uno-token');
+    const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...options.headers } });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || '请求失败');
+    return data;
+  };
   useEffect(() => {
+    api('/api/me').then(setUser).catch(() => localStorage.removeItem('uno-token'));
     socket.connect();
     socket.on('connect', () => setConnected(true));
     socket.on('disconnect', () => setConnected(false));
@@ -21,8 +40,50 @@ function App() {
     socket.on('error-msg', e => setError(e.error));
     return () => { socket.off('state'); socket.off('error-msg'); socket.disconnect(); };
   }, []);
-  const create = () => socket.emit('createRoom', { name: name || '玩家' }, r => { if (r.ok) setRoomCode(r.code); else setError(r.error); });
-  const join = () => socket.emit('joinRoom', { code: codeInput, name: name || '玩家' }, r => { if (r.ok) setRoomCode(r.code); else setError(r.error); });
+  const submitAuth = async event => {
+    event.preventDefault();
+    try {
+      const result = authMode === 'login'
+        ? await api('/api/login', { method: 'POST', body: JSON.stringify({ email, password }) })
+        : await api('/api/register', { method: 'POST', body: JSON.stringify({ email, password, username }) });
+      if (authMode === 'register' && result.ok && !result.token) {
+        setPendingEmail(email);
+        setAuthMode('confirm');
+        setError('验证码已发送到邮箱，请查收并输入');
+        return;
+      }
+      localStorage.setItem('uno-token', result.token);
+      socket.auth = { token: result.token };
+      socket.disconnect();
+      socket.connect();
+      setUser(result.user);
+      setError('登录成功');
+      setPassword('');
+    } catch (e) { setError(e.message); }
+  };
+  const confirmEmail = async event => {
+    event.preventDefault();
+    try {
+      const result = await api('/api/register/confirm', { method: 'POST', body: JSON.stringify({ email: pendingEmail, password, code: verifyCode }) });
+      localStorage.setItem('uno-token', result.token);
+      socket.auth = { token: result.token };
+      socket.disconnect(); socket.connect();
+      setUser(result.user); setPassword(''); setVerifyCode(''); setAuthMode('login'); setError('邮箱验证成功，欢迎加入！');
+    } catch (e) { setError(e.message); }
+  };
+  const openProfile = async () => {
+    try { const data = await api('/api/profile'); setProfile(data); setNickname(data.nickname); setShowProfile(true); } catch (e) { setError(e.message); }
+  };
+  const saveNickname = async event => {
+    event.preventDefault();
+    try { const result = await api('/api/profile', { method: 'PATCH', body: JSON.stringify({ nickname }) }); setProfile({ ...profile, nickname: result.nickname }); setError('昵称已更新'); }
+    catch (e) { setError(e.message); }
+  };
+  const signOut = async () => {
+    try { await api('/api/logout', { method: 'POST' }); } finally { localStorage.removeItem('uno-token'); socket.auth = {}; setUser(null); setProfile(null); setShowProfile(false); }
+  };
+  const create = () => { localStorage.setItem('uno-name', name || '玩家'); socket.emit('createRoom', { name: name || '玩家' }, r => { if (r.ok) setRoomCode(r.code); else setError(r.error); }); };
+  const join = () => { localStorage.setItem('uno-name', name || '玩家'); socket.emit('joinRoom', { code: codeInput, name: name || '玩家' }, r => { if (r.ok) setRoomCode(r.code); else setError(r.error); }); };
   const start = () => socket.emit('startGame', { code: roomCode });
   const play = i => {
     const card = game.yourHand[i];
@@ -35,10 +96,12 @@ function App() {
   const share = () => { navigator.clipboard?.writeText(`${location.origin}${location.pathname}?room=${roomCode}`); setError('邀请链接已复制'); };
   useEffect(() => { const c = new URLSearchParams(location.search).get('room'); if (c) setCodeInput(c); }, []);
   const meTurn = game?.turn === socket.id;
-  return <main className="shell"><header><div className="brand"><span className="logo">U</span><div><b>UNO PARTY</b><small>在线派对 · 2—4 位玩家</small></div></div><span className={connected ? 'status on' : 'status'}>● {connected ? '已连接' : '连接中'}</span></header>
-    {!roomCode ? <section className="welcome"><div className="hero"><div className="orbit">🟥 🟨 🟩 🟦</div><p className="eyebrow">THE CLASSIC, ONLINE</p><h1>牌局已就绪？<br/><em>开玩吧。</em></h1><p className="sub">创建房间，邀请好友，把友情放进弃牌堆。</p></div><div className="panel"><label>你的昵称</label><input value={name} onChange={e => setName(e.target.value)} maxLength="18" placeholder="输入昵称"/><button className="primary" onClick={create}>创建新房间 <span>↗</span></button><div className="divider"><span>或加入朋友的房间</span></div><div className="join"><input value={codeInput} onChange={e => setCodeInput(e.target.value.toUpperCase())} maxLength="4" placeholder="房间码"/><button onClick={join}>加入</button></div>{error && <p className="error">{error}</p>}</div></section> : <section className="table"><div className="roombar"><div><small>房间码</small><b>{roomCode}</b></div><button onClick={share}>邀请好友 ↗</button><span>{game?.players?.length || 1}/4 玩家</span></div>{!game?.started ? <div className="lobby"><h2>等待玩家加入</h2><div className="avatars">{(game?.players || [name || '你']).map((p,i)=><div className="avatar" key={i}><span>{p[0]}</span>{p}</div>)}</div><p>至少需要 2 位玩家开始游戏</p><button className="primary" disabled={(game?.players?.length || 1)<2} onClick={start}>开始游戏</button>{error && <p className="error">{error}</p>}</div> : <><div className="opponents">{(game.players || []).map((p,i)=><div className={'opponent '+(game.turn === p ? 'active' : '')} key={p}><span className="avatarSmall">{p[0]}</span><b>{p === socket.id ? '你' : `玩家 ${i+1}`}</b><small>{game.handCounts?.[p]} 张牌</small></div>)}</div><div className="center"><div className="pile" onClick={draw}><small>摸牌堆</small><div className="back">UNO</div><small>{game.drawPileCount} 张 · 点击摸牌</small></div><div className="discard"><small>弃牌 · {game.activeColor}</small><Card card={game.top}/></div></div><div className="turn">{game.winner ? `🏆 ${game.winner === socket.id ? '你赢了！' : '对手获胜'}` : meTurn ? '轮到你了！选择一张牌或摸牌' : '等待对手出牌…'}</div><div className="hand">{(game.yourHand || []).map((c,i)=><button key={i} disabled={!meTurn} onClick={()=>play(i)} className="cardButton"><Card card={c}/></button>)}</div><div className="gameActions"><button className="drawButton" disabled={!meTurn} onClick={draw}>摸一张牌</button><button className="unoButton" disabled={!game.yourHand || game.yourHand.length !== 1} onClick={callUno}>喊 UNO！</button></div>{error && <p className="error">{error}</p>}</>}</section>}
+  const playTime = seconds => `${Math.floor(seconds / 3600)} 小时 ${Math.floor((seconds % 3600) / 60)} 分钟`;
+  return <main className="shell"><header><div className="brand"><span className="logo">U</span><div><b>UNO PARTY</b><small>在线派对 · 2—4 位玩家</small></div></div><div className="headerRight"><span className={connected ? 'status on' : 'status'}>● {connected ? '已连接' : '连接中'}</span>{user ? <button className="profileLink" onClick={openProfile}>{user.email} · 个人中心</button> : <span className="status">登录后保存个人战绩</span>}</div></header>
+    {showProfile && profile ? <section className="profilePage"><button className="backLink" onClick={() => setShowProfile(false)}>← 返回游戏</button><p className="eyebrow">PLAYER PROFILE</p><h1>个人中心</h1><p className="profileEmail">{profile.email}</p><p className="profileHandle">@{profile.username}</p><form className="nicknameForm" onSubmit={saveNickname}><label>游戏昵称</label><input value={nickname} minLength="2" maxLength="20" onChange={e => setNickname(e.target.value)} placeholder="输入昵称"/><button type="submit">保存昵称</button></form><div className="statsGrid"><Stat label="胜率" value={`${profile.winRate}%`}/><Stat label="胜场" value={profile.wins}/><Stat label="总场次" value={profile.gamesPlayed}/><Stat label="累计游玩" value={playTime(profile.playSeconds)}/></div><button className="logoutButton" onClick={signOut}>退出登录</button></section> : !roomCode ? <section className="welcome"><div className="hero"><div className="orbit">🟥 🟨 🟩 🟦</div><p className="eyebrow">THE CLASSIC, ONLINE</p><h1>牌局已就绪？<br/><em>开玩吧。</em></h1><p className="sub">创建房间，邀请好友，把友情放进弃牌堆。</p></div><div className="panel"><label>你的昵称</label><input value={name} onChange={e => setName(e.target.value)} maxLength="18" placeholder="输入昵称"/><button className="primary" onClick={create}>创建新房间 <span>↗</span></button><div className="divider"><span>或加入朋友的房间</span></div><div className="join"><input value={codeInput} onChange={e => setCodeInput(e.target.value.toUpperCase())} maxLength="4" placeholder="房间码"/><button onClick={join}>加入</button></div>{!user && (authMode === 'confirm' ? <form className="authForm" onSubmit={confirmEmail}><div className="divider"><span>验证邮箱</span></div><h3>输入邮件验证码</h3><p className="authHint">验证码已发送至 {pendingEmail}，10 分钟内有效</p><input required inputMode="numeric" pattern="[0-9]{6}" maxLength="6" value={verifyCode} onChange={e => setVerifyCode(e.target.value)} placeholder="6 位验证码"/><button className="primary" type="submit">验证并创建账号</button></form> : <form className="authForm" onSubmit={submitAuth}><div className="divider"><span>账号中心</span></div><h3>{authMode === 'login' ? '邮箱登录' : '注册账号'}</h3>{authMode === 'register' && <><input required minLength="3" maxLength="20" pattern="[A-Za-z0-9_]{3,20}" autoComplete="username" value={username} onChange={e => setUsername(e.target.value)} placeholder="唯一用户名（字母/数字/下划线）"/><p className="authHint">username 唯一；游戏昵称可在个人中心修改</p></>}<input type="email" required autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="邮箱地址"/><input type="password" required minLength="8" maxLength="128" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="密码（至少 8 位）"/><button className="primary" type="submit">{authMode === 'login' ? '登录并同步战绩' : '发送邮箱验证码'}</button><button className="modeLink" type="button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}>{authMode === 'login' ? '还没有账号？立即注册' : '已有账号？返回登录'}</button></form>)}{error && <p className="error">{error}</p>}</div></section> : <section className="table"><div className="roombar"><div><small>房间码</small><b>{roomCode}</b></div><button onClick={share}>邀请好友 ↗</button><span>{game?.players?.length || 1}/4 玩家</span></div>{!game?.started ? <div className="lobby"><h2>等待玩家加入</h2><div className="avatars">{(game?.players || [name || '你']).map((p,i)=><div className="avatar" key={i}><span>{p[0]}</span>{p}</div>)}</div><p>至少需要 2 位玩家开始游戏</p><button className="primary" disabled={(game?.players?.length || 1)<2} onClick={start}>开始游戏</button>{error && <p className="error">{error}</p>}</div> : <><div className="opponents">{(game.players || []).map((p,i)=><div className={'opponent '+(game.turn === p ? 'active' : '')} key={p}><span className="avatarSmall">{p[0]}</span><b>{p === socket.id ? '你' : `玩家 ${i+1}`}</b><small>{game.handCounts?.[p]} 张牌</small></div>)}</div><div className="center"><div className="pile" onClick={draw}><small>摸牌堆</small><div className="back">UNO</div><small>{game.drawPileCount} 张 · 点击摸牌</small></div><div className="discard"><small>弃牌 · {game.activeColor}</small><Card card={game.top}/></div></div><div className="turn">{game.winner ? `🏆 ${game.winner === socket.id ? '你赢了！' : '对手获胜'}` : meTurn ? '轮到你了！选择一张牌或摸牌' : '等待对手出牌…'}</div><div className="hand">{(game.yourHand || []).map((c,i)=><button key={i} disabled={!meTurn} onClick={()=>play(i)} className="cardButton"><Card card={c}/></button>)}</div><div className="gameActions"><button className="drawButton" disabled={!meTurn} onClick={draw}>摸一张牌</button><button className="unoButton" disabled={!game.yourHand || game.yourHand.length !== 1} onClick={callUno}>喊 UNO！</button></div>{error && <p className="error">{error}</p>}</>}</section>}
   </main>;
 }
+function Stat({ label, value }) { return <div className="statCard"><span>{label}</span><strong>{value}</strong></div>; }
 function Card({ card }) { if (!card) return null; return <div className={'card '+(card.color==='wild'?'wild':'')} style={{'--card':colors[card.color]}}><span className="corner">{labels[card.value] || card.value}</span><strong>{labels[card.value] || card.value}</strong><span className="corner bottom">{labels[card.value] || card.value}</span></div>; }
 
 createRoot(document.getElementById('root')).render(<App/>);

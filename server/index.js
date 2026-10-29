@@ -77,6 +77,17 @@ app.patch("/api/profile", (req, res) => {
 
 /** rooms: { code: { players: [{id,name}], state, started } } */
 const rooms = new Map();
+const ROOM_TTL_MS = 60 * 60 * 1000;
+
+function touch(room) { room.lastActivity = Date.now(); }
+
+// 每分钟清理一次：1 小时内没有任何加入或操作的房间自动解散
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of rooms) {
+    if (now - (room.lastActivity || 0) > ROOM_TTL_MS) rooms.delete(code);
+  }
+}, 60 * 1000).unref();
 
 function saveFinishedGame(room, code) {
   if (!room?.state?.winner || room.saved) return;
@@ -96,10 +107,27 @@ function genCode() {
 }
 
 function broadcast(room, code) {
+  const names = Object.fromEntries(room.players.map(x => [x.id, x.name]));
   for (const p of room.players) {
     const state = room.started ? publicState(room.state, p.id) : { handCounts: {}, turn: null };
-    io.to(p.id).emit("state", { room: code, players: room.players.map(x => x.name), started: room.started, ...state });
+    io.to(p.id).emit("state", { room: code, players: room.players.map(x => x.name), started: room.started, names, ...state });
   }
+}
+
+function removePlayer(socketId, code, room) {
+  const i = room.players.findIndex(p => p.id === socketId);
+  if (i === -1) return false;
+  if (room.started && !room.state.winner) {
+    room.state.winner = room.players.find(p => p.id !== socketId)?.id || null;
+    if (room.state.winner) saveFinishedGame(room, code);
+    // 有人中途离场：对局结束，房间回到等待状态，可再开一局
+    room.started = false;
+    room.state = null;
+  }
+  room.players.splice(i, 1);
+  touch(room);
+  broadcast(room, code);
+  return true;
 }
 
 io.on("connection", (socket) => {
@@ -107,7 +135,7 @@ io.on("connection", (socket) => {
   socket.on("createRoom", ({ name }, cb) => {
     const code = genCode();
     const roomName = socket.data.user?.nickname || name || "玩家1";
-    rooms.set(code, { players: [{ id: socket.id, name: roomName }], state: null, started: false });
+    rooms.set(code, { players: [{ id: socket.id, name: roomName }], state: null, started: false, lastActivity: Date.now() });
     if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
     socket.join(code);
     cb?.({ ok: true, code });
@@ -120,6 +148,7 @@ io.on("connection", (socket) => {
     if (!room) return cb?.({ ok: false, error: "房间不存在" });
     if (room.started) return cb?.({ ok: false, error: "游戏已开始" });
     if (room.players.length >= 4) return cb?.({ ok: false, error: "房间已满" });
+    touch(room);
     room.players.push({ id: socket.id, name: socket.data.user?.nickname || name || `玩家${room.players.length + 1}` });
     if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
     socket.join(code.toUpperCase());
@@ -130,6 +159,7 @@ io.on("connection", (socket) => {
   socket.on("startGame", ({ code }, cb) => {
     const room = rooms.get(code);
     if (!room || room.started || room.players.length < 2) return cb?.({ ok: false });
+    touch(room);
     room.started = true;
     room.startedAt = Date.now();
     room.saved = false;
@@ -143,7 +173,16 @@ io.on("connection", (socket) => {
     if (!room?.state) return;
     const r = playCard(room.state, socket.id, cardIndex, chosenColor);
     if (!r.ok) return socket.emit("error-msg", { error: r.error });
-    if (room.state.winner) saveFinishedGame(room, code);
+    touch(room);
+    if (room.state.winner) {
+      saveFinishedGame(room, code);
+      broadcast(room, code);
+      // 让玩家看几秒胜利画面，随后房间回到等待状态，可以直接再来一局
+      setTimeout(() => {
+        if (room.state?.winner) { room.started = false; room.state = null; touch(room); broadcast(room, code); }
+      }, 3000).unref();
+      return;
+    }
     broadcast(room, code);
   });
 
@@ -152,6 +191,7 @@ io.on("connection", (socket) => {
     if (!room?.state) return;
     const r = drawCards(room.state, socket.id);
     if (!r.ok) return socket.emit("error-msg", { error: r.error });
+    touch(room);
     broadcast(room, code);
   });
 
@@ -160,23 +200,20 @@ io.on("connection", (socket) => {
     if (!room?.state) return cb?.({ ok: false, error: "game not started" });
     const result = callUno(room.state, socket.id);
     if (!result.ok) return cb?.(result);
+    touch(room);
     broadcast(room, code);
+    cb?.({ ok: true });
+  });
+
+  socket.on("leaveRoom", ({ code }, cb) => {
+    const room = rooms.get((code || "").toUpperCase());
+    if (room) { removePlayer(socket.id, code.toUpperCase(), room); socket.leave(code.toUpperCase()); }
     cb?.({ ok: true });
   });
 
   socket.on("disconnect", () => {
     socketUsers.delete(socket.id);
-    for (const [code, room] of rooms) {
-      const i = room.players.findIndex(p => p.id === socket.id);
-      if (i === -1) continue;
-      if (room.started && !room.state.winner) {
-        room.state.winner = room.players.find(player => player.id !== socket.id)?.id || null;
-        if (room.state.winner) saveFinishedGame(room, code);
-      }
-      room.players.splice(i, 1);
-      if (room.players.length === 0) { rooms.delete(code); continue; }
-      broadcast(room, code);
-    }
+    for (const [code, room] of rooms) removePlayer(socket.id, code, room);
   });
 });
 

@@ -12,10 +12,12 @@
   },
   "dependencies": {
     "express": "^4.19.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "socket.io": "^4.7.5"
   },
   "devDependencies": {
-    "socket.io-client": "^4.7.5",
+    "socket.io-client": "^4.8.4",
     "vite": "^5.4.0"
   }
 }

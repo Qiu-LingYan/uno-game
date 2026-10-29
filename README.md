@@ -9,7 +9,7 @@ npm install
 npm run dev
 ```
 
-开发时 Vite 默认只提供前端；Socket.io 服务端以 `npm start` 启动，监听 `127.0.0.1:3001`。可通过 Vite proxy 或部署 nginx 将 `/socket.io/` 转发到服务端。生产构建：
+开发时先运行 `npm start` 启动监听 `127.0.0.1:3001` 的 Socket.io 服务端，再运行 `npm run dev`；Vite 会将 `/socket.io/` 代理到服务端。生产构建：
 
 ```sh
 npm test

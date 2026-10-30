@@ -196,3 +196,16 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
   .statsGrid{grid-template-columns:repeat(2,1fr)}
   .logoutButton{width:100%}
 }
+
+/* 点对手头像查看战绩 */
+.avatarSmall.clickable{cursor:pointer;border-color:var(--primary);transition:transform .15s,box-shadow .15s}
+.avatarSmall.clickable:hover{transform:scale(1.12);box-shadow:0 0 12px var(--glow)}
+/* 轮到你时：可出的牌发光，不可出的变暗 */
+.cardButton.playable .card{outline:3px solid #48d597;outline-offset:2px;box-shadow:0 0 14px rgba(72,213,151,.45)}
+.cardButton.dim{opacity:.45;filter:grayscale(.5)}
+.cardButton.dim:hover:not(:disabled){transform:none}
+/* 玩家战绩弹窗（复用 colorModal 骨架） */
+.playerModal{min-width:300px;max-width:86vw;text-align:left}
+.playerModal .statsGrid{margin:14px 0}
+.playerModalName{margin:0;font-size:22px;font-weight:900}
+.playerModalHandle{margin:2px 0 6px;font-size:13px;color:var(--primary);font-weight:700}

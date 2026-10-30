@@ -2,7 +2,7 @@ import express from "express";
 import http from "http";
 import { Server } from "socket.io";
 import { newGame, playCard, drawCards, callUno, catchUno, keepDrawn, removePlayerFromState, publicState } from "./game.js";
-import { prepareRegistration, confirmRegistration, login, getUser, logout, profile, updateNickname, recordGame } from "./store.js";
+import { prepareRegistration, confirmRegistration, login, getUser, logout, profile, updateNickname, recordGame, publicProfile } from "./store.js";
 
 const PORT = process.env.PORT || 3001;
 const app = express();
@@ -73,6 +73,13 @@ app.patch("/api/profile", (req, res) => {
     if (socket.data.user?.id === user.id) socket.data.user.nickname = result.nickname;
   }
   res.json({ ok: true, nickname: result.nickname });
+});
+
+// 游戏内点击对手头像查看公开战绩（不含 email）
+app.get("/api/player/:username", (req, res) => {
+  const row = publicProfile(req.params.username);
+  if (!row) return res.status(404).json({ error: "玩家不存在" });
+  res.json(row);
 });
 
 /** rooms: { code: { players: [{id,name,clientId,disconnectedAt}], state, started, lastActivity } } */
@@ -175,16 +182,18 @@ function genCode() {
 
 function broadcast(room, code) {
   const names = Object.fromEntries(room.players.map(x => [x.id, x.name]));
+  // 头像点击查看资料用：socketId → { name, username|null（null=游客）}
+  const roster = Object.fromEntries(room.players.map(x => [x.id, { name: x.name, username: x.username || null }]));
   const spectatorNames = (room.spectators || []).map(x => x.name);
   const offlineIds = room.players.filter(p => p.disconnectedAt).map(p => p.id);
   const kick = room.kickTarget ? { playerId: room.kickTarget.playerId, until: room.kickTarget.until } : null;
   for (const p of room.players) {
     const state = room.started ? publicState(room.state, p.id) : { handCounts: {}, turn: null };
-    io.to(p.id).emit("state", { room: code, players: room.players.map(x => x.name), spectatorNames, spectating: false, offlineIds, kick, started: room.started, names, ...state });
+    io.to(p.id).emit("state", { room: code, players: room.players.map(x => x.name), roster, spectatorNames, spectating: false, offlineIds, kick, started: room.started, names, ...state });
   }
   for (const s of room.spectators || []) {
     const state = room.started ? publicState(room.state, null) : { handCounts: {}, turn: null };
-    io.to(s.id).emit("state", { room: code, players: room.players.map(x => x.name), spectatorNames, spectating: true, offlineIds, kick, started: room.started, names, ...state });
+    io.to(s.id).emit("state", { room: code, players: room.players.map(x => x.name), roster, spectatorNames, spectating: true, offlineIds, kick, started: room.started, names, ...state });
   }
 }
 
@@ -237,6 +246,7 @@ io.on("connection", (socket) => {
           player.id = socket.id;
           player.disconnectedAt = null;
           if (socket.data.user?.nickname) player.name = socket.data.user.nickname;
+          player.username = socket.data.user?.username || null;
           if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
           // 回线即取消 votekick 倒计时
           if (existingRoom.kickTarget && (existingRoom.kickTarget.clientId === clientId || (userId != null && existingRoom.kickTarget.userId === userId))) existingRoom.kickTarget = null;
@@ -256,7 +266,7 @@ io.on("connection", (socket) => {
 
     const roomName = socket.data.user?.nickname || name || "玩家1";
     rooms.set(code, {
-      players: [{ id: socket.id, name: roomName, clientId, userId, disconnectedAt: null }],
+      players: [{ id: socket.id, name: roomName, clientId, userId, username: socket.data.user?.username || null, disconnectedAt: null }],
       spectators: [],
       state: null,
       started: false,
@@ -291,6 +301,7 @@ io.on("connection", (socket) => {
           player.disconnectedAt = null;
         }
         if (socket.data.user?.nickname) player.name = socket.data.user.nickname;
+        player.username = socket.data.user?.username || null;
         if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
         // 回线即取消 votekick 倒计时
         if (room.kickTarget && (room.kickTarget.clientId === clientId || (userId != null && room.kickTarget.userId === userId))) room.kickTarget = null;
@@ -315,6 +326,7 @@ io.on("connection", (socket) => {
         spec.disconnectedAt = null;
       }
       if (socket.data.user?.nickname) spec.name = socket.data.user.nickname;
+      spec.username = socket.data.user?.username || null;
       if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
       socket.join(upper);
       touch(room);
@@ -326,7 +338,7 @@ io.on("connection", (socket) => {
     const joinName = socket.data.user?.nickname || name || `玩家${room.players.length + 1}`;
     if (room.started) {
       if (room.spectators.length >= 8) return cb?.({ ok: false, error: "旁观席已满" });
-      room.spectators.push({ id: socket.id, name: joinName, clientId, userId, disconnectedAt: null });
+      room.spectators.push({ id: socket.id, name: joinName, clientId, userId, username: socket.data.user?.username || null, disconnectedAt: null });
       if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
       socket.join(upper);
       touch(room);
@@ -342,6 +354,7 @@ io.on("connection", (socket) => {
       name: joinName,
       clientId,
       userId,
+      username: socket.data.user?.username || null,
       disconnectedAt: null
     });
     if (socket.data.user) socketUsers.set(socket.id, socket.data.user);

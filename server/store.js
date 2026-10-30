@@ -133,6 +133,19 @@ export function profile(userId) {
     LEFT JOIN games g ON g.id=gp.game_id WHERE u.id=? GROUP BY u.id`).get(userId);
 }
 
+// 公开战绩（不含 email）：用于游戏中点击对手头像查看资料
+export function publicProfile(username) {
+  const name = String(username || '').trim().toLowerCase();
+  if (!/^[a-z0-9_]{3,20}$/.test(name)) return null;
+  const row = db.prepare(`SELECT u.username,u.nickname,u.created_at AS memberSince, COUNT(gp.game_id) AS gamesPlayed,
+    COALESCE(SUM(gp.won),0) AS wins,
+    CASE WHEN COUNT(gp.game_id)=0 THEN 0 ELSE ROUND(100.0*SUM(gp.won)/COUNT(gp.game_id),1) END AS winRate,
+    COALESCE(SUM(g.duration_seconds),0) AS playSeconds
+    FROM users u LEFT JOIN game_players gp ON gp.user_id=u.id
+    LEFT JOIN games g ON g.id=gp.game_id WHERE u.username=? COLLATE NOCASE GROUP BY u.id`).get(name);
+  return row || null;
+}
+
 export function recordGame(roomCode, startedAt, endedAt, playerIds, winnerId, userIdBySocket) {
   const duration = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
   const insertGame = db.prepare('INSERT INTO games(room_code,started_at,ended_at,duration_seconds) VALUES(?,?,?,?)');

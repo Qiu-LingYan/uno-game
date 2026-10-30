@@ -98,7 +98,8 @@ export function playCard(state, playerId, cardIndex, chosenColor) {
   // 只剩 1 张且未喊 UNO：给其他玩家一个抓 UNO 的窗口
   if (hand.length === 1) state.unoVulnerable = { player: playerId, deadline: Date.now() + UNO_CATCH_MS };
   else if (state.unoVulnerable?.player === playerId) state.unoVulnerable = null;
-  advanceTurn(state, event === "skip" ? 2 : 1);
+  // 二人局官方规则：Reverse 等价于 Skip（出牌者继续）
+  advanceTurn(state, event === "skip" || (event === "reverse" && state.players.length === 2) ? 2 : 1);
   return { ok: true, event, drewThisTurn };
 }
 

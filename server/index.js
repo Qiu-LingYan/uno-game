@@ -74,6 +74,13 @@ app.patch("/api/profile", (req, res) => {
   for (const socket of io.sockets.sockets.values()) {
     if (socket.data.user?.id === user.id) socket.data.user.nickname = result.nickname;
   }
+  // 房间内显示名同步：座位/旁观席昵称即时更新并广播，无需重连
+  for (const [c, room] of rooms) {
+    let changed = false;
+    for (const p of room.players) if (p.userId === user.id && p.name !== result.nickname) { p.name = result.nickname; changed = true; }
+    for (const p of room.spectators || []) if (p.userId === user.id && p.name !== result.nickname) { p.name = result.nickname; changed = true; }
+    if (changed) broadcast(room, c);
+  }
   res.json({ ok: true, nickname: result.nickname });
 });
 
@@ -193,9 +200,14 @@ setInterval(() => {
 
 function saveFinishedGame(room, code) {
   if (!room?.state?.winner || room.saved) return;
-  room.saved = true;
-  recordGame(code, room.startedAt, Date.now(), room.players.map(player => player.id), room.state.winner,
-    id => room.seatUsers?.[id] ?? socketUsers.get(id)?.id ?? null);
+  try {
+    recordGame(code, room.startedAt, Date.now(), room.players.map(player => player.id), room.state.winner,
+      id => room.seatUsers?.[id] ?? socketUsers.get(id)?.id ?? null);
+    room.saved = true;
+  } catch (error) {
+    // 结算失败不能崩掉进程；saved 不置位，下次触发可重试
+    console.error("recordGame failed:", error);
+  }
 }
 
 io.use((socket, next) => {
@@ -263,7 +275,7 @@ function removePlayer(socketId, code, room, { explicitLeave = false } = {}) {
 io.on("connection", (socket) => {
   if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
   socket.on("createRoom", ({ name, code: preferredCode }, cb) => {
-    const upper = (preferredCode || "").toUpperCase();
+    const upper = String(preferredCode || "").toUpperCase();
     const clientId = socket.data.clientId;
     const userId = socket.data.user?.id;
 
@@ -289,6 +301,7 @@ io.on("connection", (socket) => {
               rebindPlayerId(existingRoom.state, oldId, socket.id);
               if (existingRoom.kickTargets) for (const k of existingRoom.kickTargets) if (k.playerId === oldId) k.playerId = socket.id;
             }
+            if (existingRoom.seatUsers?.[oldId] !== undefined) { existingRoom.seatUsers[socket.id] = existingRoom.seatUsers[oldId]; delete existingRoom.seatUsers[oldId]; }
           }
           player.userId = socket.data.user?.id || null;
           if (socket.data.user?.nickname) player.name = socket.data.user.nickname;
@@ -326,7 +339,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("joinRoom", ({ code, name }, cb) => {
-    const upper = (code || "").toUpperCase();
+    const upper = String(code || "").toUpperCase();
     const room = rooms.get(upper);
     if (!room) return cb?.({ ok: false, error: "房间不存在" });
     room.spectators = room.spectators || [];
@@ -337,7 +350,13 @@ io.on("connection", (socket) => {
     const elsewhere = seatElsewhere(userId, clientId, upper);
     if (elsewhere) return cb?.({ ok: false, error: `你已在房间 ${elsewhere} 中，请先退出再加入` });
     const sameSocketIdx = room.players.findIndex(player => player.id === socket.id);
-    const existingIdx = findPlayerIdx(room, userId, clientId);
+    let existingIdx = findPlayerIdx(room, userId, clientId);
+    // 登出后的同浏览器重连：座位仍挂着 userId，但该账号已无任何在线 socket 时，
+    // 允许按 clientId 收回座位（转成游客座位），避免出现"僵尸自己 + 新自己"
+    if (existingIdx === -1 && userId == null && clientId) {
+      const li = room.players.findIndex(p => p.clientId === clientId && p.userId != null);
+      if (li !== -1 && ![...socketUsers.values()].some(u => u.id === room.players[li].userId)) existingIdx = li;
+    }
 
     // 已占座玩家优先处理（含中局断线宽限期内的重连恢复座位），不被"游戏已开始"拦截
     if (existingIdx !== -1 || sameSocketIdx !== -1) {
@@ -354,6 +373,7 @@ io.on("connection", (socket) => {
             rebindPlayerId(room.state, oldId, socket.id);
             if (room.kickTargets) for (const k of room.kickTargets) if (k.playerId === oldId) k.playerId = socket.id;
           }
+          if (room.seatUsers?.[oldId] !== undefined) { room.seatUsers[socket.id] = room.seatUsers[oldId]; delete room.seatUsers[oldId]; }
         }
         player.userId = socket.data.user?.id || null;
         if (socket.data.user?.nickname) player.name = socket.data.user.nickname;
@@ -375,7 +395,9 @@ io.on("connection", (socket) => {
     if (specSame !== -1 || specIdx !== -1) {
       const spec = room.spectators[specSame !== -1 ? specSame : specIdx];
       if (spec.id !== socket.id) {
-        if (spec.id !== socket.id && spec.disconnectedAt && !isWithinGrace(spec) && specSame === -1) {
+        // 旁观者在线时不允许第二个连接接管（与玩家座位同等的保护）
+        if (!spec.disconnectedAt) return cb?.({ ok: false, error: "该账号已在此房间" });
+        if (spec.disconnectedAt && !isWithinGrace(spec) && specSame === -1) {
           return cb?.({ ok: false, error: "该账号已在此房间" });
         }
         spec.id = socket.id;
@@ -422,6 +444,8 @@ io.on("connection", (socket) => {
   socket.on("startGame", ({ code }, cb) => {
     const room = rooms.get(code);
     if (!room || room.started || room.players.length < 2) return cb?.({ ok: false });
+    // 只有已占座玩家能开局：防止旁观者/路人拿到房间码替全员开始
+    if (!room.players.some(p => p.id === socket.id)) return cb?.({ ok: false, error: "你不在此房间中" });
     touch(room);
     room.started = true;
     room.startedAt = Date.now();
@@ -508,7 +532,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("leaveRoom", ({ code }, cb) => {
-    const upper = (code || "").toUpperCase();
+    const upper = String(code || "").toUpperCase();
     const room = rooms.get(upper);
     if (room) { removePlayer(socket.id, upper, room, { explicitLeave: true }); socket.leave(upper); }
     cb?.({ ok: true });
@@ -523,5 +547,9 @@ io.on("connection", (socket) => {
 app.get("/healthz", (_req, res) => res.json({ ok: true, rooms: rooms.size }));
 
 server.listen(PORT, "127.0.0.1", () => console.log(`uno-game listening on 127.0.0.1:${PORT}`));
+
+// 进程级兜底：意外异常记日志而不退出（否则一个 handler 抛错 = 全部房间丢失）
+process.on("uncaughtException", err => console.error("uncaughtException:", err));
+process.on("unhandledRejection", err => console.error("unhandledRejection:", err));
 
 export { app, server, io, rooms };

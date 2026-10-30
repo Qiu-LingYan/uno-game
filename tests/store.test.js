@@ -58,6 +58,18 @@ test('email verification gates account creation; sessions and game profile stats
   assert.equal(store.getUser(login.token), null);
 });
 
+test('login failures are rate limited per email', () => {
+  const email = 'ratelimit_probe@example.com';
+  for (let i = 0; i < 10; i++) {
+    const r = store.login(email, 'wrong-pass-123');
+    assert.equal(r.ok, false);
+    assert.equal(r.error, '邮箱或密码错误');
+  }
+  const locked = store.login(email, 'wrong-pass-123');
+  assert.equal(locked.ok, false);
+  assert.equal(locked.error, '尝试次数过多，请 15 分钟后再试');
+});
+
 test.after(() => {
   store.db.close();
   rmSync(dir, { recursive: true, force: true });

@@ -164,3 +164,19 @@ test('removePlayerFromState fixes turn and clears per-player data', () => {
 test('UNO catch window is 15 seconds', () => {
   assert.equal(UNO_CATCH_MS, 15000);
 });
+
+test('two-player reverse acts as skip (official rule): caller plays again', () => {
+  const state = makeState({ hands: { a: [{color:'red',value:'reverse'},{color:'red',value:'2'}], b: [{color:'blue',value:'7'}] } });
+  const r = playCard(state, 'a', 0);
+  assert.equal(r.ok, true);
+  assert.equal(state.direction, -1);
+  assert.equal(state.players[state.turn], 'a', '2p reverse = skip, same player continues');
+});
+
+test('three-player reverse passes turn normally', () => {
+  const state = makeState({ players: ['a','b','c'], hands: { a: [{color:'red',value:'reverse'},{color:'red',value:'2'}], b: [{color:'blue',value:'7'}], c: [{color:'green',value:'8'}] }, unoCalled: { a:false,b:false,c:false } });
+  const r = playCard(state, 'a', 0);
+  assert.equal(r.ok, true);
+  assert.equal(state.direction, -1);
+  assert.equal(state.players[state.turn], 'c', '3p reverse: previous player (c) is next');
+});

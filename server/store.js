@@ -50,6 +50,17 @@ if (!pendingColumns.has('username')) db.exec("ALTER TABLE pending_registrations 
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const tokenHash = token => createHash('sha256').update(token).digest('hex');
+// 登录失败速率限制：同一邮箱 15 分钟内最多 10 次失败，防止暴力破解
+const loginAttempts = new Map();
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 10;
+function recordLoginFailure(key) {
+  const now = Date.now();
+  const rec = loginAttempts.get(key);
+  if (!rec || now - rec.first > LOGIN_WINDOW_MS) loginAttempts.set(key, { first: now, count: 1 });
+  else rec.count += 1;
+  if (loginAttempts.size > 5000) loginAttempts.clear();
+}
 // 2026-10-30 起新哈希用 N=32768；登录先按新参数校验，失败再按旧默认参数（N=16384）校验并透明升级
 const SCRYPT_PARAMS = { N: 32768, r: 8, p: 1, maxmem: 96 * 1024 * 1024 };
 const passwordHash = (password, salt) => scryptSync(password, salt, 64, SCRYPT_PARAMS).toString('hex');
@@ -108,8 +119,14 @@ export function confirmRegistration(email, code) {
 }
 
 export function login(email, password) {
+  const key = String(email || '').trim().toLowerCase();
+  const now = Date.now();
+  const rec = loginAttempts.get(key);
+  if (rec && rec.count >= LOGIN_MAX_FAILURES && now - rec.first < LOGIN_WINDOW_MS) {
+    return { ok: false, error: '尝试次数过多，请 15 分钟后再试' };
+  }
   const user = db.prepare('SELECT id,email,username,nickname,password_hash,password_salt FROM users WHERE email = ? COLLATE NOCASE').get(String(email || '').trim());
-  if (!user) return { ok: false, error: '邮箱或密码错误' };
+  if (!user) { recordLoginFailure(key); return { ok: false, error: '邮箱或密码错误' }; }
   const candidate = String(password || '');
   const stored = Buffer.from(user.password_hash, 'hex');
   let upgraded = null;
@@ -120,10 +137,11 @@ export function login(email, password) {
   if (!(actual && timingSafeEqual(actual, stored))) {
     // 旧默认参数（N=16384）哈希：验证通过后用新参数重哈希
     const legacy = scryptSync(candidate, user.password_salt, 64);
-    if (!timingSafeEqual(legacy, stored)) return { ok: false, error: '邮箱或密码错误' };
+    if (!timingSafeEqual(legacy, stored)) { recordLoginFailure(key); return { ok: false, error: '邮箱或密码错误' }; }
     upgraded = passwordHash(candidate, user.password_salt);
   }
   const token = randomBytes(32).toString('base64url');
+  loginAttempts.delete(key);
   db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
   if (upgraded) db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(upgraded, user.id);
   db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(tokenHash(token), user.id, Date.now() + 30 * 24 * 60 * 60 * 1000);

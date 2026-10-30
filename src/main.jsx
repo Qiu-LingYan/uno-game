@@ -188,11 +188,12 @@ function App() {
   };
   const play = i => {
     const card = game.yourHand[i];
-    if (card.color === 'wild') { setPickIndex(i); return; }
+    // 先判可玩性：叠加期不可出的变色牌不弹选色窗，直接提示
     if (!playable(card)) {
       if (game.pendingDraw > 0) return setError(`这张牌不能出：现在只能叠加 +2/+4（待摸 ${game.pendingDraw} 张）`);
       return setError(`这张牌不能出：需要 ${colorNames[game.activeColor] || '同色'}的牌，或与弃牌同数字/功能（${labels[game.top.value] || game.top.value}），或打出变色牌`);
     }
+    if (card.color === 'wild') { setPickIndex(i); return; }
     socket.emit('playCard', { code: roomCode, cardIndex: i });
   };
   const playWild = chosenColor => { socket.emit('playCard', { code: roomCode, cardIndex: pickIndex, chosenColor }); setPickIndex(null); };

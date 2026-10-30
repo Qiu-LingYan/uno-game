@@ -117,6 +117,27 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 .pick.red i{background:#ff5062}.pick.yellow i{background:#ffd843}.pick.green i{background:#48d597}.pick.blue i{background:#4c9aff}
 .pickCancel{display:block;margin:18px auto 0;border:0;background:none;color:var(--muted);font-size:13px;font-weight:700}
 @keyframes modalIn{from{opacity:0;transform:scale(.92)}to{opacity:1;transform:scale(1)}}
+/* ---- 提示 / 突脸 / 状态 ---- */
+.toast{position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:100;max-width:92vw;padding:14px 22px;border-radius:16px;background:linear-gradient(135deg,#7a2b3f,#5c1f3a);border:1px solid #ff7884;color:#ffdbe0;font-weight:800;font-size:14px;box-shadow:0 8px 30px #000a;animation:modalIn .18s ease-out;text-align:center}
+.unoFlash{position:fixed;inset:0;z-index:90;display:flex;flex-direction:column;align-items:center;justify-content:center;pointer-events:none;background:radial-gradient(ellipse at center,#6647e033,transparent 70%)}
+.unoFlash span{font-size:clamp(72px,18vw,150px);font-weight:900;font-style:italic;color:#fff;text-shadow:0 0 30px #6647e0,0 4px 12px #000a;animation:unoPop .22s cubic-bezier(.2,1.6,.4,1)}
+.unoFlash small{margin-top:8px;font-size:16px;font-weight:800;color:#cec6e1;background:#130f1dd9;padding:8px 18px;border-radius:999px}
+@keyframes unoPop{from{opacity:0;transform:scale(.3) rotate(-8deg)}to{opacity:1;transform:scale(1) rotate(0)}}
+.activeColor{display:flex;flex-direction:column;align-items:center;gap:8px}
+.activeColor small{color:#b3a3f0;font-size:11px;font-weight:800;letter-spacing:.1em}
+.colorChip{display:grid;place-items:center;min-width:78px;height:44px;padding:0 14px;border-radius:999px;font-weight:900;font-size:15px;color:#fff;border:3px solid #f8f3e8;box-shadow:0 0 18px #0006}
+.colorChip.red{background:#ff5062;box-shadow:0 0 22px #ff506288}
+.colorChip.yellow{background:#ffd843;color:#3a2f00;box-shadow:0 0 22px #ffd84388}
+.colorChip.green{background:#48d597;box-shadow:0 0 22px #48d59788}
+.colorChip.blue{background:#4c9aff;box-shadow:0 0 22px #4c9aff88}
+.colorChip.wild{background:conic-gradient(#ff5062 0 25%,#ffd843 0 50%,#48d597 0 75%,#4c9aff 0)}
+.spectateBar{text-align:center;margin:16px 0;padding:14px;border:1px dashed var(--border);border-radius:16px;background:#171226;color:#b3a3f0;font-weight:800}
+.spectateList{color:var(--muted);font-size:12px}
+.kickBar{text-align:center;margin:10px 0;padding:12px 16px;border:1px solid #f4c86a66;border-radius:14px;background:#3a321066;color:#f4c86a;font-weight:800;font-size:13px}
+.kickBtn{margin-top:4px;border:1px solid #eebdba;color:#eebdba;background:none;border-radius:9px;padding:5px 10px;font-size:11px;font-weight:800}
+.opponent.offline{opacity:.55;border-style:dashed}
+.unoCatch{padding:0 8px}
+.catchButton{max-width:100%;font-size:14px}
 /* ---- 个人中心 ---- */
 .authForm h3{margin:0 0 12px;font-size:18px}
 .authForm>input{display:block;margin:10px 0}

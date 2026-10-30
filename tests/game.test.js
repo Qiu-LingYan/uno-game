@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDeck, canPlay, playCard, drawCards, callUno, catchUno, keepDrawn, publicState, UNO_CATCH_MS } from '../server/game.js';
+import { buildDeck, canPlay, playCard, drawCards, callUno, catchUno, keepDrawn, removePlayerFromState, publicState, UNO_CATCH_MS } from '../server/game.js';
 
 function makeState(overrides = {}) {
   return { players: ['a','b'], hands: { a: [], b: [] }, discard: [{ color:'red', value:'3' }], drawPile: [], activeColor:'red', turn:0, direction:1, pendingDraw:0, winner:null, unoCalled: { a:false, b:false }, mayPlayDrawn: null, unoVulnerable: null, ...overrides };
@@ -132,4 +132,21 @@ test('publicState exposes mayPlayDrawn and hides expired unoVulnerable', () => {
   const s = publicState(state, 'a');
   assert.equal(s.mayPlayDrawn, 2);
   assert.equal(s.unoVulnerable, null);
+});
+
+test('removePlayerFromState fixes turn and clears per-player data', () => {
+  const state = makeState({ players: ['a','b','c'], hands: { a:[{color:'red',value:'5'}], b:[{color:'red',value:'6'}], c:[{color:'red',value:'7'}] }, unoCalled: { a:false,b:false,c:false } });
+  state.turn = 0; // 轮到 a
+  assert.equal(removePlayerFromState(state, 'a'), true);
+  assert.deepEqual(state.players, ['b','c']);
+  assert.equal(state.turn, 0); // b 顶上
+  assert.equal(state.hands.a, undefined);
+  // 移除的不是当前行动者：turn=1(c) 移除 c 后应指向 b
+  state.turn = 1;
+  removePlayerFromState(state, 'c');
+  assert.equal(state.turn, 0);
+});
+
+test('UNO catch window is 15 seconds', () => {
+  assert.equal(UNO_CATCH_MS, 15000);
 });

@@ -28,7 +28,7 @@ export function canPlay(card, topCard, activeColor) {
   return false;
 }
 
-export const UNO_CATCH_MS = 2000;
+export const UNO_CATCH_MS = 15000;
 
 export function newGame(playerIds) {
   const deck = buildDeck();
@@ -172,6 +172,20 @@ function reshuffle(state) {
   const rest = state.discard.map(c => c.color === "wild" ? { ...c, color: "wild" } : c);
   state.drawPile = shuffle(rest);
   state.discard = [top];
+}
+
+// 把玩家从进行中的对局状态里移除（votekick）：修正 turn 与方向，剩余 1 人时游戏自然结束
+export function removePlayerFromState(state, playerId) {
+  const idx = state.players.indexOf(playerId);
+  if (idx === -1) return false;
+  state.players.splice(idx, 1);
+  delete state.hands[playerId];
+  delete state.unoCalled[playerId];
+  if (state.unoVulnerable?.player === playerId) state.unoVulnerable = null;
+  if (state.mayPlayDrawn != null && state.turn === idx) state.mayPlayDrawn = null;
+  if (state.turn > idx) state.turn -= 1;
+  state.turn = ((state.turn % state.players.length) + state.players.length) % state.players.length;
+  return true;
 }
 
 export function publicState(state, forPlayer) {

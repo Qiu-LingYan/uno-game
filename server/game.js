@@ -93,7 +93,8 @@ export function playCard(state, playerId, cardIndex, chosenColor) {
   else if (card.value === "draw2") { state.pendingDraw = 2; event = "draw2"; }
   else if (card.value === "wild4") { state.pendingDraw = 4; event = "wild4"; }
 
-  if (hand.length === 0) { state.winner = playerId; state.unoVulnerable = null; return { ok: true, event }; }
+  // 最后一张若是 +2/+4：下家仍需摸牌/叠加，本局未结束（官方规则）
+  if (hand.length === 0 && state.pendingDraw === 0) { state.winner = playerId; state.unoVulnerable = null; return { ok: true, event }; }
   // 只剩 1 张且未喊 UNO：给其他玩家一个抓 UNO 的窗口
   if (hand.length === 1) state.unoVulnerable = { player: playerId, deadline: Date.now() + UNO_CATCH_MS };
   else if (state.unoVulnerable?.player === playerId) state.unoVulnerable = null;
@@ -169,8 +170,7 @@ export function drawCards(state, playerId) {
 function reshuffle(state) {
   if (state.discard.length <= 1) return;
   const top = state.discard.pop();
-  const rest = state.discard.map(c => c.color === "wild" ? { ...c, color: "wild" } : c);
-  state.drawPile = shuffle(rest);
+  state.drawPile = shuffle(state.discard);
   state.discard = [top];
 }
 
@@ -203,7 +203,7 @@ export function publicState(state, forPlayer) {
     unoCalled: state.unoCalled,
     mayPlayDrawn: state.mayPlayDrawn,
     unoVulnerable: state.unoVulnerable && state.unoVulnerable.deadline > Date.now()
-      ? { player: state.unoVulnerable.player, remainingMs: state.unoVulnerable.deadline - Date.now() }
+      ? { player: state.unoVulnerable.player, remainingMs: Math.max(0, state.unoVulnerable.deadline - Date.now()) }
       : null,
   };
 }

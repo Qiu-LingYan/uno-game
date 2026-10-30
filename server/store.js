@@ -50,7 +50,9 @@ if (!pendingColumns.has('username')) db.exec("ALTER TABLE pending_registrations 
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const tokenHash = token => createHash('sha256').update(token).digest('hex');
-const passwordHash = (password, salt) => scryptSync(password, salt, 64).toString('hex');
+// 2026-10-30 起新哈希用 N=32768；登录先按新参数校验，失败再按旧默认参数（N=16384）校验并透明升级
+const SCRYPT_PARAMS = { N: 32768, r: 8, p: 1, maxmem: 96 * 1024 * 1024 };
+const passwordHash = (password, salt) => scryptSync(password, salt, 64, SCRYPT_PARAMS).toString('hex');
 
 export function prepareRegistration(email, password, username) {
   if (typeof email !== 'string' || !emailPattern.test(email) || email.length > 254) return { ok: false, error: '请输入有效邮箱' };
@@ -61,6 +63,7 @@ export function prepareRegistration(email, password, username) {
   if (db.prepare('SELECT 1 FROM users WHERE email=? COLLATE NOCASE').get(normalizedEmail)) return { ok: false, error: '该邮箱已注册' };
   if (db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').get(normalizedUsername)) return { ok: false, error: '该用户名已被占用' };
   if (db.prepare('SELECT 1 FROM pending_registrations WHERE username=? COLLATE NOCASE AND email<>? COLLATE NOCASE').get(normalizedUsername, normalizedEmail)) return { ok: false, error: '该用户名暂不可用' };
+  db.prepare('DELETE FROM pending_registrations WHERE expires_at < ?').run(Date.now());
   const salt = randomBytes(16).toString('hex');
   const code = String(randomBytes(4).readUInt32BE() % 1000000).padStart(6, '0');
   db.prepare(`INSERT INTO pending_registrations(email,username,password_hash,password_salt,code_hash,expires_at,attempts)
@@ -85,6 +88,11 @@ export function confirmRegistration(email, code) {
     return { ok: false, error: '验证码错误' };
   }
   const token = randomBytes(32).toString('base64url');
+  // 用户名可能在等待验证期间被他人注册：给出友好错误并作废该 pending（需重新注册）
+  if (db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').get(pending.username)) {
+    db.prepare('DELETE FROM pending_registrations WHERE email=?').run(normalizedEmail);
+    return { ok: false, error: '该用户名已被占用，请重新注册并换一个用户名' };
+  }
   db.exec('BEGIN IMMEDIATE');
   try {
     const result = db.prepare('INSERT INTO users(email,username,nickname,password_hash,password_salt) VALUES(?,?,?,?,?)').run(normalizedEmail, pending.username, pending.username, pending.password_hash, pending.password_salt);
@@ -101,9 +109,23 @@ export function confirmRegistration(email, code) {
 
 export function login(email, password) {
   const user = db.prepare('SELECT id,email,username,nickname,password_hash,password_salt FROM users WHERE email = ? COLLATE NOCASE').get(String(email || '').trim());
-  const actual = scryptSync(String(password || ''), user?.password_salt || 'invalid-user-salt', 64);
-  if (!user || !timingSafeEqual(actual, Buffer.from(user.password_hash, 'hex'))) return { ok: false, error: '邮箱或密码错误' };
+  if (!user) return { ok: false, error: '邮箱或密码错误' };
+  const candidate = String(password || '');
+  const stored = Buffer.from(user.password_hash, 'hex');
+  let upgraded = null;
+  let actual;
+  try {
+    actual = scryptSync(candidate, user.password_salt, 64, SCRYPT_PARAMS);
+  } catch { actual = null; }
+  if (!(actual && timingSafeEqual(actual, stored))) {
+    // 旧默认参数（N=16384）哈希：验证通过后用新参数重哈希
+    const legacy = scryptSync(candidate, user.password_salt, 64);
+    if (!timingSafeEqual(legacy, stored)) return { ok: false, error: '邮箱或密码错误' };
+    upgraded = passwordHash(candidate, user.password_salt);
+  }
   const token = randomBytes(32).toString('base64url');
+  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
+  if (upgraded) db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(upgraded, user.id);
   db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(tokenHash(token), user.id, Date.now() + 30 * 24 * 60 * 60 * 1000);
   return { ok: true, token, user: { id: user.id, email: user.email, username: user.username, nickname: user.nickname } };
 }

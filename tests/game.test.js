@@ -27,6 +27,20 @@ test('valid final card wins; invalid play is rejected', () => {
   assert.equal(playCard(state, 'b', 0).ok, false);
 });
 
+test('final card +2 does not win immediately; next player must draw', () => {
+  const state = { players: ['a','b'], hands: { a: [{color:'blue',value:'draw2'}], b: [{color:'red',value:'1'}] }, discard: [{color:'red',value:'draw2'}], drawPile: [{color:'green',value:'9'}, {color:'green',value:'8'}], activeColor:'red', turn:0, direction:1, pendingDraw:0, winner:null, unoCalled: { a:false, b:false }, mayPlayDrawn: null, unoVulnerable: null };
+  const r = playCard(state, 'a', 0, 'blue');
+  assert.equal(r.ok, true);
+  assert.equal(state.winner, null, 'last-card draw2 must not end the game');
+  assert.equal(state.pendingDraw, 2);
+  assert.equal(state.turn, 1);
+  const d = drawCards(state, 'b');
+  assert.equal(d.ok, true);
+  assert.equal(d.drawn, 2);
+  assert.equal(state.pendingDraw, 0);
+  assert.equal(state.turn, 0);
+});
+
 test('player with one card can call UNO and announcement is included in public state', () => {
   const state = { players: ['a','b'], hands: { a: [{color:'red',value:'5'}, {color:'blue',value:'7'}], b: [{color:'green',value:'1'}, {color:'green',value:'2'}] }, discard: [{color:'red',value:'3'}], drawPile: [], activeColor:'red', turn:0, direction:1, pendingDraw:0, winner:null, unoCalled: { a: false, b: false } };
   const r = playCard(state, 'a', 0);

@@ -7,7 +7,9 @@ import { prepareRegistration, confirmRegistration, login, getUser, logout, profi
 const PORT = process.env.PORT || 3001;
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+// CORS 白名单：站点自身 + 本地开发，禁止任意来源建立 WS 连接
+const ALLOWED_ORIGINS = [process.env.APP_URL || "https://chat.qiulingyan.top", "http://localhost:5173", "http://127.0.0.1:5173"];
+const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS, methods: ["GET", "POST"] } });
 app.use(express.json({ limit: "16kb" }));
 app.use(express.static(new URL("../dist", import.meta.url).pathname));
 
@@ -104,6 +106,16 @@ function findSpectatorIdx(room, userId, clientId) {
   return i;
 }
 
+// 同一账号/clientId 只能占据一个房间：防止登录用户在多个房间同时占座刷战绩
+function seatElsewhere(userId, clientId, excludeCode) {
+  for (const [code, room] of rooms) {
+    if (code === excludeCode) continue;
+    const seated = (room.players || []).concat(room.spectators || []);
+    if (seated.some(p => (userId != null && p.userId === userId) || (userId == null && clientId && p.clientId === clientId))) return code;
+  }
+  return null;
+}
+
 // 一轮结束：房间回到等待状态，未满员时旁观者自动转正为玩家，房主可直接开下一轮
 function endRound(room, code) {
   room.started = false;
@@ -128,31 +140,47 @@ setInterval(() => {
       rooms.delete(code);
       continue;
     }
-    // votekick 到期：把该玩家移出对局，剩余玩家继续（只剩 1 人则结束游戏回大厅）
-    if (room.kickTarget && now > room.kickTarget.until) {
-      const target = room.players.find(p => p.id === room.kickTarget.playerId || p.clientId === room.kickTarget.clientId);
-      room.kickTarget = null;
-      if (target && room.started && room.state) {
-        removePlayerFromState(room.state, target.id);
-        room.players.splice(room.players.indexOf(target), 1);
-        touch(room);
-        if (room.players.length <= 1) {
-          // 只剩一个玩家：结束游戏，不记战绩
-          room.started = false; room.state = null;
-          while (room.spectators?.length && room.players.length < 4) room.players.push({ ...room.spectators.shift(), disconnectedAt: null });
+    // votekick 到期：把目标移出对局/房间（支持同时跟踪多个掉线玩家）
+    if (room.kickTargets?.length) {
+      const due = room.kickTargets.filter(k => now > k.until);
+      if (due.length) {
+        room.kickTargets = room.kickTargets.filter(k => now <= k.until);
+        for (const k of due) {
+          const target = room.players.find(p => p.id === k.playerId || p.clientId === k.clientId);
+          if (!target) continue;
+          const si = room.players.indexOf(target);
+          if (si !== -1) room.players.splice(si, 1);
+          if (room.started && room.state) {
+            removePlayerFromState(room.state, target.id);
+            if (room.players.length <= 1) {
+              // 只剩一个玩家：结束游戏，不记战绩
+              room.started = false; room.state = null;
+              while (room.spectators?.length && room.players.length < 4) room.players.push({ ...room.spectators.shift(), disconnectedAt: null });
+            }
+          }
         }
-      } else if (target) {
-        room.players.splice(room.players.indexOf(target), 1);
+        touch(room);
       }
     }
     // 清理超出宽限期的断线玩家与旁观者
+    let removed = false;
     for (let i = room.players.length - 1; i >= 0; i--) {
       const p = room.players[i];
       if (p.disconnectedAt && now - p.disconnectedAt > RECONNECT_GRACE_MS) {
         room.players.splice(i, 1);
-        touch(room);
+        removed = true;
+        // 对局仍在进行：把该玩家同步移出牌局状态，避免幽灵玩家卡死回合
+        if (room.started && room.state && !room.state.winner) {
+          removePlayerFromState(room.state, p.id);
+          if (room.kickTargets) room.kickTargets = room.kickTargets.filter(k => k.playerId !== p.id);
+          if (room.players.length <= 1) {
+            room.started = false; room.state = null;
+            while (room.spectators?.length && room.players.length < 4) room.players.push({ ...room.spectators.shift(), disconnectedAt: null });
+          }
+        }
       }
     }
+    if (removed) { touch(room); broadcast(room, code); }
     if (room.spectators) {
       room.spectators = room.spectators.filter(s => !(s.disconnectedAt && now - s.disconnectedAt > RECONNECT_GRACE_MS));
     }
@@ -164,7 +192,8 @@ setInterval(() => {
 function saveFinishedGame(room, code) {
   if (!room?.state?.winner || room.saved) return;
   room.saved = true;
-  recordGame(code, room.startedAt, Date.now(), room.players.map(player => player.id), room.state.winner, id => socketUsers.get(id)?.id);
+  recordGame(code, room.startedAt, Date.now(), room.players.map(player => player.id), room.state.winner,
+    id => room.seatUsers?.[id] ?? socketUsers.get(id)?.id ?? null);
 }
 
 io.use((socket, next) => {
@@ -186,14 +215,14 @@ function broadcast(room, code) {
   const roster = Object.fromEntries(room.players.map(x => [x.id, { name: x.name, username: x.username || null }]));
   const spectatorNames = (room.spectators || []).map(x => x.name);
   const offlineIds = room.players.filter(p => p.disconnectedAt).map(p => p.id);
-  const kick = room.kickTarget ? { playerId: room.kickTarget.playerId, until: room.kickTarget.until } : null;
+  const kicks = (room.kickTargets || []).map(k => ({ playerId: k.playerId, until: k.until }));
   for (const p of room.players) {
     const state = room.started ? publicState(room.state, p.id) : { handCounts: {}, turn: null };
-    io.to(p.id).emit("state", { room: code, players: room.players.map(x => x.name), roster, spectatorNames, spectating: false, offlineIds, kick, started: room.started, names, ...state });
+    io.to(p.id).emit("state", { room: code, players: room.players.map(x => x.name), roster, spectatorNames, spectating: false, offlineIds, kicks, started: room.started, names, ...state });
   }
   for (const s of room.spectators || []) {
     const state = room.started ? publicState(room.state, null) : { handCounts: {}, turn: null };
-    io.to(s.id).emit("state", { room: code, players: room.players.map(x => x.name), roster, spectatorNames, spectating: true, offlineIds, kick, started: room.started, names, ...state });
+    io.to(s.id).emit("state", { room: code, players: room.players.map(x => x.name), roster, spectatorNames, spectating: true, offlineIds, kicks, started: room.started, names, ...state });
   }
 }
 
@@ -201,7 +230,8 @@ function removePlayer(socketId, code, room, { explicitLeave = false } = {}) {
   const i = room.players.findIndex(p => p.id === socketId);
   if (i !== -1) {
     const player = room.players[i];
-    if (room.started && !room.state.winner) {
+    // 仅"主动离开"判负并结束对局；断线保留座位与对局，等待重连或 votekick
+    if (explicitLeave && room.started && room.state && !room.state.winner) {
       room.state.winner = room.players.find(p => p.id !== socketId)?.id || null;
       if (room.state.winner) saveFinishedGame(room, code);
       // 有人中途离场：对局结束，房间回到等待状态，可再开一局（旁观者转正）
@@ -235,6 +265,11 @@ io.on("connection", (socket) => {
     const clientId = socket.data.clientId;
     const userId = socket.data.user?.id;
 
+    if (upper && !/^[A-Z0-9]{4}$/.test(upper)) return cb?.({ ok: false, error: "房间码需为 4 位字母或数字" });
+    // 跨房间重复占座拦截（本房间重连不受影响）
+    const other = seatElsewhere(userId, clientId, upper);
+    if (other) return cb?.({ ok: false, error: `你已在房间 ${other} 中，请先退出再加入` });
+
     // 如果提供了房间码且存在，尝试重连
     if (upper) {
       const existingRoom = rooms.get(upper);
@@ -249,7 +284,7 @@ io.on("connection", (socket) => {
           player.username = socket.data.user?.username || null;
           if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
           // 回线即取消 votekick 倒计时
-          if (existingRoom.kickTarget && (existingRoom.kickTarget.clientId === clientId || (userId != null && existingRoom.kickTarget.userId === userId))) existingRoom.kickTarget = null;
+          if (existingRoom.kickTargets) existingRoom.kickTargets = existingRoom.kickTargets.filter(k => !(k.clientId === clientId || (userId != null && k.userId === userId)));
           socket.join(upper);
           touch(existingRoom);
           broadcast(existingRoom, upper);
@@ -287,6 +322,9 @@ io.on("connection", (socket) => {
 
     const clientId = socket.data.clientId;
     const userId = socket.data.user?.id;
+    // 跨房间重复占座拦截（本房间重连/恢复座位不受影响）
+    const elsewhere = seatElsewhere(userId, clientId, upper);
+    if (elsewhere) return cb?.({ ok: false, error: `你已在房间 ${elsewhere} 中，请先退出再加入` });
     const sameSocketIdx = room.players.findIndex(player => player.id === socket.id);
     const existingIdx = findPlayerIdx(room, userId, clientId);
 
@@ -304,7 +342,7 @@ io.on("connection", (socket) => {
         player.username = socket.data.user?.username || null;
         if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
         // 回线即取消 votekick 倒计时
-        if (room.kickTarget && (room.kickTarget.clientId === clientId || (userId != null && room.kickTarget.userId === userId))) room.kickTarget = null;
+        if (room.kickTargets) room.kickTargets = room.kickTargets.filter(k => !(k.clientId === clientId || (userId != null && k.userId === userId)));
         socket.join(upper);
         touch(room);
         broadcast(room, upper);
@@ -370,6 +408,8 @@ io.on("connection", (socket) => {
     room.started = true;
     room.startedAt = Date.now();
     room.saved = false;
+    // 开局即固定 userId 映射：对局中登出/断线导致 socketUsers 清理后，结算仍能记到战绩
+    room.seatUsers = Object.fromEntries(room.players.map(p => [p.id, p.userId || null]));
     room.state = newGame(room.players.map(p => p.id));
     broadcast(room, code);
     cb?.({ ok: true });
@@ -385,7 +425,7 @@ io.on("connection", (socket) => {
       saveFinishedGame(room, code);
       broadcast(room, code);
       // 让玩家看几秒胜利画面，随后房间回到等待状态（旁观者转正），可以直接再来一局
-      setTimeout(() => { if (room.state?.winner) endRound(room, code); }, 3000).unref();
+      setTimeout(() => { if (rooms.get(code) === room && room.state?.winner) endRound(room, code); }, 3000).unref();
       return;
     }
     broadcast(room, code);
@@ -413,19 +453,19 @@ io.on("connection", (socket) => {
     cb?.({ ok: true });
   });
 
-  // votekick：对掉线玩家发起，3 分钟倒计时内回线自动取消，到期移出对局
-  socket.on("voteKick", ({ code }, cb) => {
+  // votekick：对掉线玩家发起，3 分钟倒计时内回线自动取消，到期移出对局；支持对多个掉线玩家分别发起
+  socket.on("voteKick", ({ code, targetId }, cb) => {
     const room = rooms.get(code);
     if (!room?.started || !room.state) return cb?.({ ok: false, error: "游戏未开始" });
     if (!room.players.some(p => p.id === socket.id)) return cb?.({ ok: false, error: "你不在此对局中" });
-    const offline = room.players.filter(p => p.disconnectedAt);
-    if (!offline.length) return cb?.({ ok: false, error: "没有掉线玩家" });
-    if (!room.kickTarget) {
-      const target = offline.sort((a, b) => a.disconnectedAt - b.disconnectedAt)[0];
-      room.kickTarget = { playerId: target.id, clientId: target.clientId, userId: target.userId, until: Date.now() + VOTEKICK_MS };
-      touch(room);
-      broadcast(room, code);
-    }
+    room.kickTargets = room.kickTargets || [];
+    const offline = room.players.filter(p => p.disconnectedAt && !room.kickTargets.some(k => k.playerId === p.id));
+    if (!offline.length) return cb?.({ ok: false, error: room.kickTargets.length ? "目标已在移出倒计时中" : "没有掉线玩家" });
+    const target = targetId ? offline.find(p => p.id === targetId) : offline.sort((a, b) => a.disconnectedAt - b.disconnectedAt)[0];
+    if (!target) return cb?.({ ok: false, error: "没有掉线玩家" });
+    room.kickTargets.push({ playerId: target.id, clientId: target.clientId, userId: target.userId, until: Date.now() + VOTEKICK_MS });
+    touch(room);
+    broadcast(room, code);
     cb?.({ ok: true });
   });
 

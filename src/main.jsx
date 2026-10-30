@@ -49,6 +49,7 @@ function App() {
   const [now, setNow] = useState(Date.now());
   const [viewUser, setViewUser] = useState(null);   // 点对手头像弹窗：username 或 'guest'
   const [viewData, setViewData] = useState(null);   // 公开战绩数据
+  const [connecting, setConnecting] = useState(false); // 加入/重连过程中显示连接弹窗
   const show = say(setError);
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(''), 4500); return () => clearTimeout(t); }, [error]);
   useEffect(() => { if (!unoFlash) return; const t = setTimeout(() => setUnoFlash(''), 2200); return () => clearTimeout(t); }, [unoFlash]);
@@ -68,19 +69,23 @@ function App() {
       // URL 优先；旧版本写入 localStorage 的房间码作为兼容回退
       const fromUrl = new URLSearchParams(location.search).get('room');
       const saved = (fromUrl || localStorage.getItem('uno-room') || '').toUpperCase();
-      if (saved) socket.emit('joinRoom', { code: saved, name: localStorage.getItem('uno-name') || '玩家' }, r => {
-        if (r?.ok) {
-          localStorage.setItem('uno-room', r.code);
-          setRoomCode(r.code);
-          const url = new URL(location.href);
-          url.searchParams.set('room', r.code);
-          history.replaceState(null, '', url);
-        } else if (r?.error === '房间不存在') {
-          localStorage.removeItem('uno-room');
-          const url = new URL(location.href); url.searchParams.delete('room'); history.replaceState(null, '', url);
-          setError('之前的房间已解散');
-        }
-      });
+      if (saved) {
+        setConnecting(true);
+        socket.emit('joinRoom', { code: saved, name: localStorage.getItem('uno-name') || '玩家' }, r => {
+          setConnecting(false);
+          if (r?.ok) {
+            localStorage.setItem('uno-room', r.code);
+            setRoomCode(r.code);
+            const url = new URL(location.href);
+            url.searchParams.set('room', r.code);
+            history.replaceState(null, '', url);
+          } else if (r?.error === '房间不存在') {
+            localStorage.removeItem('uno-room');
+            const url = new URL(location.href); url.searchParams.delete('room'); history.replaceState(null, '', url);
+            setError('之前的房间已解散');
+          }
+        });
+      }
     });
     socket.on('disconnect', () => setConnected(false));
     socket.on('state', s => {
@@ -138,8 +143,8 @@ function App() {
     try { await api('/api/logout', { method: 'POST' }); } finally { localStorage.removeItem('uno-token'); socket.auth = { clientId }; setUser(null); setProfile(null); setShowProfile(false); }
   };
   const setRoomUrl = code => { const url = new URL(location.href); if (code) url.searchParams.set('room', code); else url.searchParams.delete('room'); history.replaceState(null, '', url); };
-  const create = () => { localStorage.setItem('uno-name', name || '玩家'); socket.emit('createRoom', { name: name || '玩家' }, r => { if (r.ok) { setRoomCode(r.code); localStorage.setItem('uno-room', r.code); setRoomUrl(r.code); } else setError(r.error); }); };
-  const join = (code) => { const c = (code ?? codeInput).toUpperCase(); if (!c) return setError('请输入房间码'); localStorage.setItem('uno-name', name || '玩家'); socket.emit('joinRoom', { code: c, name: name || '玩家' }, r => { if (r.ok) { setRoomCode(r.code); localStorage.setItem('uno-room', r.code); setRoomUrl(r.code); if (r.spectating) setError('对局进行中，你已进入旁观席，下一轮自动加入'); } else setError(r.error); }); };
+  const create = () => { localStorage.setItem('uno-name', name || '玩家'); setConnecting(true); socket.emit('createRoom', { name: name || '玩家' }, r => { setConnecting(false); if (r.ok) { setRoomCode(r.code); localStorage.setItem('uno-room', r.code); setRoomUrl(r.code); } else setError(r.error); }); };
+  const join = (code) => { const c = (code ?? codeInput).toUpperCase(); if (!c) return setError('请输入房间码'); localStorage.setItem('uno-name', name || '玩家'); setConnecting(true); socket.emit('joinRoom', { code: c, name: name || '玩家' }, r => { setConnecting(false); if (r.ok) { setRoomCode(r.code); localStorage.setItem('uno-room', r.code); setRoomUrl(r.code); if (r.spectating) setError('对局进行中，你已进入旁观席，下一轮自动加入'); } else setError(r.error); }); };
   const leave = () => { socket.emit('leaveRoom', { code: roomCode }); localStorage.removeItem('uno-room'); setRoomUrl(null); setRoomCode(null); setGame(null); setError('已退出房间'); };
   const start = () => socket.emit('startGame', { code: roomCode });
   const playable = card => {
@@ -178,6 +183,7 @@ function App() {
 {game.spectating ? <div className="spectateBar">👀 观战中 · 本轮结束后自动加入牌局</div> : <><div className="hand">{(game.yourHand || []).map((c,i)=><button key={`${c.color}-${c.value}-${i}`} disabled={!meTurn} onClick={()=>play(i)} className={'cardButton'+(i===game.mayPlayDrawn?' drawn':'')+(meTurn && game.mayPlayDrawn == null && !game.winner ? (playable(c) ? ' playable' : ' dim') : '')}><Card card={c}/></button>)}</div>
 {meTurn && game.mayPlayDrawn != null && <div className="drawnActions"><button className="drawButton" onClick={()=>play(game.mayPlayDrawn)}>打出这张</button><button className="drawButton" onClick={keepDrawn}>留着，结束回合</button></div>}
 <div className="gameActions"><button className="drawButton" disabled={!meTurn || game.mayPlayDrawn != null} onClick={draw}>摸一张牌</button><button className="unoButton" disabled={!game.yourHand || game.yourHand.length !== 1} onClick={callUno}>喊 UNO！</button></div></>}
+{connecting && <div className="modalBackdrop"><div className="colorModal connectModal"><div className="spinner"/><p>正在连接…</p><p className="authHint">正在加入房间，请稍候</p></div></div>}
 {pickIndex !== null && <div className="modalBackdrop" onClick={() => setPickIndex(null)}><div className="colorModal" onClick={e => e.stopPropagation()}><p>为变色牌选择颜色</p><div className="colorOptions">{[['red','红色'],['yellow','黄色'],['green','绿色'],['blue','蓝色']].map(([c,label]) => <button key={c} className={'pick '+c} onClick={() => playWild(c)}><i/>{label}</button>)}</div><button className="pickCancel" onClick={() => setPickIndex(null)}>取消</button></div></div>}
 {viewUser !== null && <div className="modalBackdrop" onClick={() => setViewUser(null)}><div className="colorModal playerModal" onClick={e => e.stopPropagation()}>{viewUser === 'guest' ? <><p className="playerModalName">游客玩家</p><p className="authHint">该玩家未登录，没有战绩档案。登录后即可在个人中心查看胜率、胜场与游玩时长。</p></> : viewData ? <><p className="eyebrow">PLAYER PROFILE</p><p className="playerModalName">{viewData.nickname}</p><p className="playerModalHandle">@{viewData.username}</p><div className="statsGrid"><Stat label="胜率" value={`${viewData.winRate}%`}/><Stat label="胜场" value={viewData.wins}/><Stat label="总场次" value={viewData.gamesPlayed}/><Stat label="累计游玩" value={playTime(viewData.playSeconds)}/></div><p className="authHint">加入时间：{(viewData.memberSince || '').slice(0, 10)}</p></> : <><p className="playerModalName">@{viewUser}</p><p className="authHint">正在加载战绩…</p></>}<button className="pickCancel" onClick={() => setViewUser(null)}>关闭</button></div></div>}</>}</section>}
   </main>;

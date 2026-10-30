@@ -209,3 +209,10 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 .playerModal .statsGrid{margin:14px 0}
 .playerModalName{margin:0;font-size:22px;font-weight:900}
 .playerModalHandle{margin:2px 0 6px;font-size:13px;color:var(--primary);font-weight:700}
+
+/* 加入/重连中的连接弹窗 */
+.connectModal{min-width:260px;text-align:center;padding:30px 36px}
+.connectModal p{margin:0 0 6px;font-size:17px;font-weight:800}
+.connectModal .authHint{font-weight:400;margin:0}
+.connectModal .spinner{width:36px;height:36px;border:4px solid #48348f;border-top-color:var(--primary);border-radius:50%;margin:0 auto 16px;animation:connectSpin .8s linear infinite}
+@keyframes connectSpin{to{transform:rotate(360deg)}}

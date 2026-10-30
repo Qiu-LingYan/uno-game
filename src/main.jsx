@@ -175,3 +175,7 @@ function App() {
 {pickIndex !== null && <div className="modalBackdrop" onClick={() => setPickIndex(null)}><div className="colorModal" onClick={e => e.stopPropagation()}><p>为变色牌选择颜色</p><div className="colorOptions">{[['red','红色'],['yellow','黄色'],['green','绿色'],['blue','蓝色']].map(([c,label]) => <button key={c} className={'pick '+c} onClick={() => playWild(c)}><i/>{label}</button>)}</div><button className="pickCancel" onClick={() => setPickIndex(null)}>取消</button></div></div>}</>}</section>}
   </main>;
 }
+function Stat({ label, value }) { return <div className="statCard"><span>{label}</span><strong>{value}</strong></div>; }
+function Card({ card }) { if (!card) return null; return <div className={'card '+(card.color==='wild'?'wild':'')} style={{'--card':colors[card.color]}}><span className="corner">{labels[card.value] || card.value}</span><strong>{labels[card.value] || card.value}</strong><span className="corner bottom">{labels[card.value] || card.value}</span></div>; }
+
+createRoot(document.getElementById('root')).render(<App/>);

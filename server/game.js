@@ -188,6 +188,23 @@ export function removePlayerFromState(state, playerId) {
   return true;
 }
 
+// 座位恢复（刷新/重连后 socket id 变化）时，把牌局状态里的旧 id 重绑定到新 id，
+// 否则恢复者手牌丢失、turn 判定失效，永远轮不到他出牌
+export function rebindPlayerId(state, oldId, newId) {
+  if (oldId === newId) return;
+  const idx = state.players.indexOf(oldId);
+  if (idx === -1) return;
+  state.players[idx] = newId;
+  state.hands[newId] = state.hands[oldId];
+  delete state.hands[oldId];
+  if (state.unoCalled[oldId] !== undefined) {
+    state.unoCalled[newId] = state.unoCalled[oldId];
+    delete state.unoCalled[oldId];
+  }
+  if (state.unoVulnerable?.player === oldId) state.unoVulnerable = { ...state.unoVulnerable, player: newId };
+  if (state.winner === oldId) state.winner = newId;
+}
+
 export function publicState(state, forPlayer) {
   return {
     players: state.players,

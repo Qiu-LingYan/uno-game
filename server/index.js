@@ -1,7 +1,7 @@
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
-import { newGame, playCard, drawCards, callUno, catchUno, keepDrawn, removePlayerFromState, publicState } from "./game.js";
+import { newGame, playCard, drawCards, callUno, catchUno, keepDrawn, removePlayerFromState, rebindPlayerId, publicState } from "./game.js";
 import { prepareRegistration, confirmRegistration, login, getUser, logout, profile, updateNickname, recordGame, publicProfile } from "./store.js";
 
 const PORT = process.env.PORT || 3001;
@@ -160,6 +160,8 @@ setInterval(() => {
           }
         }
         touch(room);
+        // 到期移出后必须广播，否则所有客户端停留在过期状态
+        broadcast(room, code);
       }
     }
     // 清理超出宽限期的断线玩家与旁观者
@@ -278,8 +280,17 @@ io.on("connection", (socket) => {
         const existingIdx = findPlayerIdx(existingRoom, userId, clientId);
         if (existingIdx !== -1 && (existingRoom.players[existingIdx].id === socket.id || isWithinGrace(existingRoom.players[existingIdx]))) {
           const player = existingRoom.players[existingIdx];
-          player.id = socket.id;
-          player.disconnectedAt = null;
+          if (player.id !== socket.id) {
+            const oldId = player.id;
+            player.id = socket.id;
+            player.disconnectedAt = null;
+            // 刷新/重连：同步重绑定牌局状态里的 socket id，恢复者才能继续出牌
+            if (existingRoom.started && existingRoom.state && !existingRoom.state.winner) {
+              rebindPlayerId(existingRoom.state, oldId, socket.id);
+              if (existingRoom.kickTargets) for (const k of existingRoom.kickTargets) if (k.playerId === oldId) k.playerId = socket.id;
+            }
+          }
+          player.userId = socket.data.user?.id || null;
           if (socket.data.user?.nickname) player.name = socket.data.user.nickname;
           player.username = socket.data.user?.username || null;
           if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
@@ -335,9 +346,16 @@ io.on("connection", (socket) => {
       // 已在座位：同一 socket 再次加入仅确认成功；断线后则恢复原座位。
       if (player.id === socket.id || isWithinGrace(player)) {
         if (player.id !== socket.id) {
+          const oldId = player.id;
           player.id = socket.id;
           player.disconnectedAt = null;
+          // 刷新/重连：同步重绑定牌局状态里的 socket id，恢复者才能继续出牌
+          if (room.started && room.state && !room.state.winner) {
+            rebindPlayerId(room.state, oldId, socket.id);
+            if (room.kickTargets) for (const k of room.kickTargets) if (k.playerId === oldId) k.playerId = socket.id;
+          }
         }
+        player.userId = socket.data.user?.id || null;
         if (socket.data.user?.nickname) player.name = socket.data.user.nickname;
         player.username = socket.data.user?.username || null;
         if (socket.data.user) socketUsers.set(socket.id, socket.data.user);

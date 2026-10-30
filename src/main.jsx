@@ -3,7 +3,10 @@ import { createRoot } from 'react-dom/client';
 import { io } from 'socket.io-client';
 import './style.css';
 
-const clientId = localStorage.getItem('uno-client-id') || crypto.randomUUID();
+const uidPattern = /^[A-Za-z0-9_-]{8,64}$/;
+const uidFromUrl = new URLSearchParams(location.search).get('u');
+// 游客身份可显式写在 URL（?u=）：换浏览器/分享恢复状态；登录用户由账号恢复，忽略 URL 里的 u
+const clientId = uidFromUrl && uidPattern.test(uidFromUrl) ? uidFromUrl : (localStorage.getItem('uno-client-id') || crypto.randomUUID());
 localStorage.setItem('uno-client-id', clientId);
 const socket = io(import.meta.env.VITE_SOCKET_URL || undefined, { autoConnect: false, path: '/socket.io', auth: callback => callback({ token: localStorage.getItem('uno-token'), clientId }) });
 const storedName = localStorage.getItem('uno-name') || '';
@@ -50,6 +53,7 @@ function App() {
   const [viewUser, setViewUser] = useState(null);   // 点对手头像弹窗：username 或 'guest'
   const [viewData, setViewData] = useState(null);   // 公开战绩数据
   const [connecting, setConnecting] = useState(false); // 加入/重连过程中显示连接弹窗
+  const [meDone, setMeDone] = useState(false);         // /api/me 探测完成后才同步 ?u= 参数
   const show = say(setError);
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(''), 4500); return () => clearTimeout(t); }, [error]);
   useEffect(() => { if (!unoFlash) return; const t = setTimeout(() => setUnoFlash(''), 2200); return () => clearTimeout(t); }, [unoFlash]);
@@ -61,8 +65,19 @@ function App() {
     if (!response.ok) throw new Error(data.error || '请求失败');
     return data;
   };
+  // 游客：URL 显式携带 ?u=<clientId>（换浏览器/分享可恢复状态）；登录用户：账号即身份，去掉 u
   useEffect(() => {
-    api('/api/me').then(setUser).catch(() => localStorage.removeItem('uno-token'));
+    if (!meDone) return;
+    const url = new URL(location.href);
+    if (user) {
+      if (url.searchParams.has('u')) { url.searchParams.delete('u'); history.replaceState(null, '', url); }
+    } else if (url.searchParams.get('u') !== clientId) {
+      url.searchParams.set('u', clientId);
+      history.replaceState(null, '', url);
+    }
+  }, [user, meDone]);
+  useEffect(() => {
+    api('/api/me').then(setUser).catch(() => localStorage.removeItem('uno-token')).finally(() => setMeDone(true));
     socket.connect();
     socket.on('connect', () => {
       setConnected(true);

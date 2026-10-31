@@ -299,10 +299,7 @@ function autoAct(room, code, { silent = false } = {}) {
   if (idx !== -1) {
     const card = state.hands[pid][idx];
     const r = playCard(state, pid, idx, card.color === "wild" ? chosenColorFor(state, pid) : undefined);
-    if (r.ok) {
-      moved = "自动出了一张牌";
-      if ((state.hands[pid] || []).length === 1) callUno(state, pid);
-    } else idx = -1;
+    if (!r.ok) idx = -1;
   }
   if (idx === -1) {
     const r = drawCards(state, pid);
@@ -314,8 +311,8 @@ function autoAct(room, code, { silent = false } = {}) {
       const card = state.hands[pid][drawnIdx];
       playCard(state, pid, drawnIdx, card.color === "wild" ? chosenColorFor(state, pid) : undefined);
       moved = "超时打出刚摸的牌";
-      if ((state.hands[pid] || []).length === 1) callUno(state, pid);
     }
+    // 喊 UNO 不在这里立即执行：交给 tick 循环延迟触发，留出抓 UNO 窗口
   }
   if (!silent) io.to(code).emit("roomNotice", { text: `⏱ ${name} ${moved}` });
   afterAction(room, code);
@@ -343,8 +340,17 @@ setInterval(() => {
   for (const [code, room] of rooms) {
     if (!room.started || !room.state || room.state.winner) continue;
     const state = room.state;
+    // Bot 延迟喊 UNO：剩 1 张后随机 1-3s 才喊（与出牌节奏一致），给真人留出抓 UNO 窗口
+    if (state.unoVulnerable && !state.unoCalled[state.unoVulnerable.player]) {
+      const vSeat = room.players.find(p => p.id === state.unoVulnerable.player);
+      if (isBot(vSeat) && Math.random() < 0.07) {
+        callUno(state, vSeat.id);
+        io.to(code).emit("roomNotice", { text: `🤖 ${vSeat.name} 喊了 UNO！` });
+        broadcast(room, code);
+      }
+    }
     // Bot 顺手抓 UNO：60% 概率在窗口内抓未喊 UNO 的真人/其他玩家
-    if (state.unoVulnerable && now < state.unoVulnerable.deadline && Math.random() < 0.07) {
+    if (state.unoVulnerable && now < state.unoVulnerable.deadline && Math.random() < 0.02) {
       const bot = room.players.find(p => p.bot && p.id !== state.unoVulnerable.player);
       if (bot) {
         const r = catchUno(state, bot.id, now);

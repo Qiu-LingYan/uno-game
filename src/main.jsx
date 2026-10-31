@@ -10,6 +10,23 @@ const clientId = uidFromUrl && uidPattern.test(uidFromUrl) ? uidFromUrl : (local
 localStorage.setItem('uno-client-id', clientId);
 const socket = io(import.meta.env.VITE_SOCKET_URL || undefined, { autoConnect: false, path: '/socket.io', transports: ['websocket'], auth: callback => callback({ token: localStorage.getItem('uno-token'), clientId }) });
 const storedName = localStorage.getItem('uno-name') || '';
+// PWA 安装事件只在模块加载早期捕获：beforeinstallprompt 全生命周期只发一次，
+// 若等 React 挂载后再挂监听可能已经错过（表现为"添加到 APP"按钮时有时无）
+let capturedInstallEvent = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); capturedInstallEvent = e; });
+// 部署新版本后，开着旧标签页/从后台切回的用户会停留在旧 bundle（排行榜等新入口"消失"）。
+// 通过对比当前页面引用的 JS 文件名与服务器最新 HTML 的引用来检测，非对局中自动刷新。
+function checkNewVersion() {
+  if (location.pathname.startsWith('/api') || !navigator.onLine) return;
+  fetch(location.pathname, { cache: 'no-store' }).then(r => r.text()).then(html => {
+    const m = html.match(/assets\/index-[^"']+\.js/);
+    const cur = document.querySelector('script[type="module"]')?.src || '';
+    if (m && !cur.includes(m[0]) && sessionStorage.getItem('uno-reloaded') !== m[0]) {
+      sessionStorage.setItem('uno-reloaded', m[0]);
+      location.reload();
+    }
+  }).catch(() => {});
+}
 const labels = { skip: '🚫', reverse: '🔄', draw2: '+2', wild: '变色', wild4: '+4' };
 const colors = { red: '#ff5062', yellow: '#ffd843', green: '#48d597', blue: '#4c9aff', wild: '#252936' };
 const colorNames = { red: '红色', yellow: '黄色', green: '绿色', blue: '蓝色', wild: '变色' };
@@ -61,15 +78,20 @@ function App() {
   const [boardData, setBoardData] = useState(null);
   const [installEvt, setInstallEvt] = useState(null);  // beforeinstallprompt 暂存
   const [isStandalone, setIsStandalone] = useState(false);
-  // PWA 安装入口：捕获浏览器安装事件；iOS Safari 无该事件，走分享菜单指引
+  // PWA 安装入口：使用模块顶层已捕获的安装事件（含 React 挂载前触发的）；iOS Safari 无该事件，走分享菜单指引
   useEffect(() => {
     const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
     setIsStandalone(!!standalone);
-    const onPrompt = e => { e.preventDefault(); setInstallEvt(e); };
-    window.addEventListener('beforeinstallprompt', onPrompt);
+    setInstallEvt(capturedInstallEvent);
     window.addEventListener('appinstalled', () => { setInstallEvt(null); setIsStandalone(true); });
-    return () => window.removeEventListener('beforeinstallprompt', onPrompt);
   }, []);
+  // 旧标签页版本检测：回到前台时对比最新构建；对局进行中不打扰，结束后再切回会自动刷新
+  useEffect(() => {
+    const inGame = game?.started && !game?.winner;
+    const onVisible = () => { if (document.visibilityState === 'visible' && !inGame) checkNewVersion(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [game?.started, game?.winner]);
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
   const show = say(setError);
   useEffect(() => { if (!error) return; const t = setTimeout(() => setError(''), 4500); return () => clearTimeout(t); }, [error]);

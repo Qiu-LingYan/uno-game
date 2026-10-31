@@ -1,4 +1,4 @@
-const CACHE = 'uno-v1';
+const CACHE = 'uno-v2';
 const ASSETS = ['/icon-192.png', '/icon-512.png', '/manifest.webmanifest'];
 
 self.addEventListener('install', (e) => {
@@ -18,6 +18,11 @@ self.addEventListener('fetch', (e) => {
   if (url.origin !== location.origin) return;
   // 动态请求一律直连，不缓存
   if (url.pathname.startsWith('/socket.io') || url.pathname.startsWith('/api')) return;
+  // 页面导航：网络优先，断网才回退缓存——保证发版后旧标签页也能拿到新 HTML
+  if (e.request.mode === 'navigate') {
+    e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+    return;
+  }
   // 带 hash 的构建产物 + 字体：缓存优先
   if (url.pathname.startsWith('/assets') || url.pathname.endsWith('.woff2')) {
     e.respondWith(

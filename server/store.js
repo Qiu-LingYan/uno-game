@@ -82,6 +82,17 @@ const q = {
     LEFT JOIN games g ON g.id=gp.game_id WHERE u.username=? COLLATE NOCASE GROUP BY u.id`),
   insertGame: db.prepare('INSERT INTO games(room_code,started_at,ended_at,duration_seconds) VALUES(?,?,?,?)'),
   insertGamePlayer: db.prepare('INSERT OR IGNORE INTO game_players(game_id,user_id,won) VALUES(?,?,?)'),
+  leaderboard: db.prepare(`SELECT u.username,u.nickname, COUNT(gp.game_id) AS gamesPlayed,
+    COALESCE(SUM(gp.won),0) AS wins,
+    CASE WHEN COUNT(gp.game_id)=0 THEN 0 ELSE ROUND(100.0*SUM(gp.won)/COUNT(gp.game_id),1) END AS winRate,
+    COALESCE(SUM(g.duration_seconds),0) AS playSeconds
+    FROM users u JOIN game_players gp ON gp.user_id=u.id
+    JOIN games g ON g.id=gp.game_id GROUP BY u.id
+    HAVING gamesPlayed > 0
+    ORDER BY winRate DESC, gamesPlayed DESC, playSeconds DESC LIMIT 20`),
+  recentGames: db.prepare(`SELECT g.room_code, g.duration_seconds, g.ended_at, gp.won
+    FROM game_players gp JOIN games g ON g.id=gp.game_id
+    WHERE gp.user_id=? ORDER BY g.ended_at DESC LIMIT 10`),
 };
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -200,6 +211,16 @@ export function updateNickname(userId, nickname) {
 
 export function profile(userId) {
   return q.profile.get(userId);
+}
+
+// 排行榜：胜率优先，其次场次、时长
+export function leaderboard() {
+  return q.leaderboard.all();
+}
+
+// 个人中心最近对局
+export function recentGames(userId) {
+  return q.recentGames.all(userId);
 }
 
 // 公开战绩（不含 email）：用于游戏中点击对手头像查看资料

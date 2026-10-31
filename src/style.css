@@ -145,6 +145,32 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 @media (prefers-reduced-motion:reduce){.welcome,.loginPage,.profilePage,.table,.modalBackdrop{animation:none}}
 
+/* ---- 回合倒计时 / 机器人 / 排行榜 / 最近战绩 ---- */
+.turnTimer{margin-left:12px;font-weight:800;color:#7ee0a8}
+.turnTimer.urgent{color:#ff6a78}
+.turnHint{display:block;opacity:.55;font-size:12px;margin-top:2px}
+.botRow{margin:10px 0 14px}
+.botButton{background:transparent;border:1px dashed #4a4f62;color:#b9bdcf;border-radius:10px;padding:8px 14px;cursor:pointer;font-size:13px}
+.botButton:hover:not(:disabled){border-color:#6647e0;color:#fff}
+.boardEntry{margin-top:10px;width:100%;background:transparent;border:1px solid #34363d;border-radius:12px;padding:12px 14px;text-align:left;color:#b9bdcf;cursor:pointer}
+.boardEntry b{display:block;color:#f7f5f2}
+.boardEntry span{font-size:12px;opacity:.6}
+.boardList{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.boardRow{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid #34363d;border-radius:12px;padding:10px 14px}
+.boardRow.top{border-color:#6647e0}
+.boardRow .rank{width:26px;height:26px;border-radius:50%;background:#2a2f42;display:flex;align-items:center;justify-content:center;font-weight:800}
+.boardRow.top .rank{background:#6647e0;color:#fff}
+.boardName{flex:1;font-weight:700}
+.boardName small{display:block;font-weight:400;opacity:.5;font-size:12px}
+.boardStat{font-size:13px;color:#b9bdcf}
+.recentList{display:flex;flex-direction:column;gap:6px;margin:10px 0 16px}
+.recentRow{display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid #34363d;border-radius:10px;padding:8px 12px;font-size:13px}
+.recentRow .recentResult{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:800;background:#3a3f52}
+.recentRow.win .recentResult{background:#2f7d54;color:#fff}
+.recentRoom{flex:1;color:#b9bdcf}
+.recentDur,.recentDate{opacity:.6}
+.profileActions{display:flex;gap:10px;margin-top:8px}
+
 /* ---- 个人中心 ---- */
 .authForm h3{margin:0 0 12px;font-size:18px}
 .authForm>input{display:block;margin:10px 0}

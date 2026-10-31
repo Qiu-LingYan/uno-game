@@ -1,8 +1,8 @@
 import express from "express";
 import http from "http";
 import { Server } from "socket.io";
-import { newGame, playCard, drawCards, callUno, catchUno, keepDrawn, removePlayerFromState, rebindPlayerId, publicState } from "./game.js";
-import { prepareRegistration, confirmRegistration, login, getUser, logout, profile, updateNickname, recordGame, publicProfile } from "./store.js";
+import { newGame, playCard, drawCards, callUno, catchUno, keepDrawn, removePlayerFromState, rebindPlayerId, publicState, canPlay, COLORS } from "./game.js";
+import { prepareRegistration, confirmRegistration, login, getUser, logout, profile, updateNickname, recordGame, publicProfile, leaderboard, recentGames } from "./store.js";
 
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS = 7;   // 单房间座位上限（旁观席另限 8）
@@ -85,8 +85,11 @@ app.get("/api/me", (req, res) => {
 app.get("/api/profile", (req, res) => {
   const user = authFromRequest(req);
   if (!user) return res.status(401).json({ error: "请先登录" });
-  res.json(profile(user.id));
+  res.json({ ...profile(user.id), recent: recentGames(user.id) });
 });
+
+// 排行榜（公开）：胜率优先
+app.get("/api/leaderboard", (_req, res) => res.json(leaderboard()));
 app.patch("/api/profile", (req, res) => {
   const user = authFromRequest(req);
   if (!user) return res.status(401).json({ error: "请先登录" });
@@ -118,8 +121,18 @@ const ROOM_TTL_MS = 60 * 60 * 1000;
 // 断线座位保留 1 小时（与房间 TTL 一致）：手机切后台/锁屏断连后，1 小时内回来仍能恢复座位，
 // 之前 30 秒宽限导致"几分钟没操作房间就没了"
 const RECONNECT_GRACE_MS = 60 * 60 * 1000;
+// 回合倒计时：真人 60s，Bot 1.5-3s；超时自动出可出的牌、否则摸牌，防止挂机卡死全场
+const TURN_MS = 60 * 1000;
+let botSeq = 0;
 
 function touch(room) { room.lastActivity = Date.now(); }
+
+function isBot(p) { return !!p?.bot; }
+function resetTurnTimer(room) {
+  const pid = room.state && !room.state.winner ? room.state.players[room.state.turn] : null;
+  const seat = room.players.find(p => p.id === pid);
+  room.turnDeadline = pid ? Date.now() + (isBot(seat) ? 1500 + Math.floor(Math.random() * 1500) : TURN_MS) : null;
+}
 
 // 座位匹配：登录用户按 userId，匿名玩家按 clientId（前端持久化，刷新不丢状态）
 function findPlayerIdx(room, userId, clientId) {
@@ -238,6 +251,95 @@ io.use((socket, next) => {
   next();
 });
 
+// ===== 回合超时 / Bot 行动（共用同一套决策）=====
+function bestPlayableIdx(state, pid) {
+  const hand = state.hands[pid] || [];
+  const top = state.discard[state.discard.length - 1];
+  return hand.findIndex(c => state.pendingDraw > 0
+    ? (c.value === "wild4" || (c.value === "draw2" && top.value === "draw2"))
+    : canPlay(c, top, state.activeColor));
+}
+function chosenColorFor(state, pid) {
+  const counts = { red: 0, yellow: 0, green: 0, blue: 0 };
+  for (const c of state.hands[pid] || []) if (c.color in counts) counts[c.color]++;
+  let best = COLORS[0], n = -1;
+  for (const k of COLORS) if (counts[k] > n) { n = counts[k]; best = k; }
+  return best;
+}
+// 对当前回合玩家执行"自动出牌/摸牌"；返回 true 表示动了牌局
+function autoAct(room, code, { silent = false } = {}) {
+  const state = room.state;
+  if (!state || state.winner) return false;
+  const pid = state.players[state.turn];
+  const seat = room.players.find(p => p.id === pid);
+  const name = seat?.name || "玩家";
+  let moved = "";
+  let idx = bestPlayableIdx(state, pid);
+  if (idx !== -1) {
+    const card = state.hands[pid][idx];
+    const r = playCard(state, pid, idx, card.color === "wild" ? chosenColorFor(state, pid) : undefined);
+    if (r.ok) {
+      moved = "自动出了一张牌";
+      if ((state.hands[pid] || []).length === 1) callUno(state, pid);
+    } else idx = -1;
+  }
+  if (idx === -1) {
+    const r = drawCards(state, pid);
+    if (!r.ok) return false;
+    moved = state.pendingDraw === 0 && r.drawn ? "自动摸牌" : `摸了 ${r.drawn} 张`;
+    // 主动摸 1 张且可出：超时规则为直接打出
+    if (r.mayPlay) {
+      const drawnIdx = state.mayPlayDrawn;
+      const card = state.hands[pid][drawnIdx];
+      playCard(state, pid, drawnIdx, card.color === "wild" ? chosenColorFor(state, pid) : undefined);
+      moved = "超时打出刚摸的牌";
+      if ((state.hands[pid] || []).length === 1) callUno(state, pid);
+    }
+  }
+  if (!silent) io.to(code).emit("roomNotice", { text: `⏱ ${name} ${moved}` });
+  afterAction(room, code);
+  return true;
+}
+// 行动后统一处理：胜负结算/广播/重置回合倒计时
+function afterAction(room, code) {
+  touch(room);
+  if (room.state?.winner) {
+    room.turnDeadline = null;
+    saveFinishedGame(room, code);
+    broadcast(room, code);
+    setTimeout(() => { if (rooms.get(code) === room && room.state?.winner) endRound(room, code); }, 3000).unref();
+    return;
+  }
+  resetTurnTimer(room);
+  broadcast(room, code);
+}
+// 每秒巡检：Bot 抓 UNO / Bot 行动 / 真人回合超时
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of rooms) {
+    if (!room.started || !room.state || room.state.winner) continue;
+    const state = room.state;
+    // Bot 顺手抓 UNO：60% 概率在窗口内抓未喊 UNO 的真人/其他玩家
+    if (state.unoVulnerable && now < state.unoVulnerable.deadline && Math.random() < 0.25) {
+      const bot = room.players.find(p => p.bot && p.id !== state.unoVulnerable.player);
+      if (bot) {
+        const r = catchUno(state, bot.id, now);
+        if (r.ok) {
+          const targetName = room.players.find(p => p.id === r.target)?.name || "玩家";
+          io.to(code).emit("roomNotice", { text: `🤖 ${bot.name} 抓到了 ${targetName} 的 UNO，罚摸两张` });
+          broadcast(room, code);
+        }
+      }
+    }
+    if (now < (room.turnDeadline || 0)) continue;
+    const pid = state.players[state.turn];
+    const seat = room.players.find(p => p.id === pid);
+    if (isBot(seat)) autoAct(room, code, { silent: true });
+    else autoAct(room, code);
+  }
+}, 1000).unref();
+
+
 function genCode() {
   let c;
   do { c = Math.random().toString(36).slice(2, 6).toUpperCase(); } while (rooms.has(c));
@@ -250,14 +352,17 @@ function broadcast(room, code) {
   const roster = Object.fromEntries(room.players.map(x => [x.id, { name: x.name, username: x.username || null }]));
   const spectatorNames = (room.spectators || []).map(x => x.name);
   const offlineIds = room.players.filter(p => p.disconnectedAt).map(p => p.id);
+  const botIds = room.players.filter(p => p.bot).map(p => p.id);
   const kicks = (room.kickTargets || []).map(k => ({ playerId: k.playerId, until: k.until }));
+  const turnEndsAt = room.started && room.state && !room.state.winner ? room.turnDeadline || null : null;
+  const base = { room: code, players: room.players.map(x => x.name), roster, spectatorNames, offlineIds, kicks, botIds, botNames: room.players.filter(p => p.bot).map(p => p.name), turnEndsAt, started: room.started, names };
   for (const p of room.players) {
     const state = room.started ? publicState(room.state, p.id) : { handCounts: {}, turn: null };
-    io.to(p.id).emit("state", { room: code, players: room.players.map(x => x.name), roster, spectatorNames, spectating: false, offlineIds, kicks, started: room.started, names, ...state });
+    io.to(p.id).emit("state", { ...base, spectating: false, ...state });
   }
   for (const s of room.spectators || []) {
     const state = room.started ? publicState(room.state, null) : { handCounts: {}, turn: null };
-    io.to(s.id).emit("state", { room: code, players: room.players.map(x => x.name), roster, spectatorNames, spectating: true, offlineIds, kicks, started: room.started, names, ...state });
+    io.to(s.id).emit("state", { ...base, spectating: true, ...state });
   }
 }
 
@@ -474,8 +579,32 @@ io.on("connection", (socket) => {
     // 开局即固定 userId 映射：对局中登出/断线导致 socketUsers 清理后，结算仍能记到战绩
     room.seatUsers = Object.fromEntries(room.players.map(p => [p.id, p.userId || null]));
     room.state = newGame(room.players.map(p => p.id));
+    resetTurnTimer(room);
     broadcast(room, code);
     cb?.({ ok: true });
+  });
+
+  // Bot 补位：任意已占座玩家可在等待阶段添加/移除 AI 玩家
+  socket.on("addBot", ({ code }, cb) => {
+    const room = rooms.get(code);
+    if (!room) return cb?.({ ok: false, error: "房间不存在" });
+    if (room.started) return cb?.({ ok: false, error: "游戏已开始" });
+    if (!room.players.some(p => p.id === socket.id)) return cb?.({ ok: false, error: "你不在此房间中" });
+    if (room.players.length >= MAX_PLAYERS) return cb?.({ ok: false, error: "房间已满" });
+    touch(room);
+    room.players.push({ id: `bot:${++botSeq}`, name: `机器人 ${botSeq}`, clientId: null, userId: null, username: null, disconnectedAt: null, bot: true });
+    cb?.({ ok: true });
+    broadcast(room, code);
+  });
+  socket.on("removeBot", ({ code }, cb) => {
+    const room = rooms.get(code);
+    if (!room || room.started) return cb?.({ ok: false, error: "游戏已开始" });
+    const i = room.players.findLastIndex(p => p.bot);
+    if (i === -1) return cb?.({ ok: false, error: "没有机器人" });
+    room.players.splice(i, 1);
+    touch(room);
+    cb?.({ ok: true });
+    broadcast(room, code);
   });
 
   socket.on("playCard", ({ code, cardIndex, chosenColor }) => {
@@ -483,15 +612,7 @@ io.on("connection", (socket) => {
     if (!room?.state) return;
     const r = playCard(room.state, socket.id, cardIndex, chosenColor);
     if (!r.ok) return socket.emit("error-msg", { error: r.error });
-    touch(room);
-    if (room.state.winner) {
-      saveFinishedGame(room, code);
-      broadcast(room, code);
-      // 让玩家看几秒胜利画面，随后房间回到等待状态（旁观者转正），可以直接再来一局
-      setTimeout(() => { if (rooms.get(code) === room && room.state?.winner) endRound(room, code); }, 3000).unref();
-      return;
-    }
-    broadcast(room, code);
+    afterAction(room, code);
   });
 
   socket.on("draw", ({ code }) => {
@@ -499,8 +620,7 @@ io.on("connection", (socket) => {
     if (!room?.state) return;
     const r = drawCards(room.state, socket.id);
     if (!r.ok) return socket.emit("error-msg", { error: r.error });
-    touch(room);
-    broadcast(room, code);
+    afterAction(room, code);
   });
 
   socket.on("callUno", ({ code }, cb) => {
@@ -547,8 +667,7 @@ io.on("connection", (socket) => {
     if (!room?.state) return cb?.({ ok: false, error: "game not started" });
     const result = keepDrawn(room.state, socket.id);
     if (!result.ok) return cb?.(result);
-    touch(room);
-    broadcast(room, code);
+    afterAction(room, code);
     cb?.({ ok: true });
   });
 

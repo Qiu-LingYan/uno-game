@@ -70,6 +70,36 @@ test('login failures are rate limited per email', () => {
   assert.equal(locked.error, '尝试次数过多，请 15 分钟后再试');
 });
 
+test('points scoring with streak bonus, leaderboard by points, replay access', () => {
+  const p = store.prepareRegistration('points@example.com', 'correct-horse-8', 'points_fan');
+  const u = store.confirmRegistration(p.email, p.code);
+  const uid = u.user.id;
+  const p2 = store.prepareRegistration('points2@example.com', 'correct-horse-8', 'points_pal');
+  const u2 = store.confirmRegistration(p2.email, p2.code);
+  const uid2 = u2.user.id;
+  const byUser = id => id === 's1' ? uid : uid2;
+  // 胜 +3（首胜无连击加成）→ 连胜 +4（3+连击加成 1）→ 负 +1 且连击清零
+  store.recordGame('P001', Date.now() - 60000, Date.now(), ['s1', 's2'], 's1', byUser, [
+    { t: 0, a: 'flip', card: { color: 'red', value: '3' }, color: 'red' },
+    { t: 2, a: 'play', n: 'p', card: { color: 'red', value: '5' }, color: 'red' },
+  ]);
+  store.recordGame('P002', Date.now() - 60000, Date.now(), ['s1', 's2'], 's1', byUser, []);
+  store.recordGame('P003', Date.now() - 60000, Date.now(), ['s1', 's2'], 's2', byUser, []);
+  const row = store.db.prepare('SELECT points,streak FROM users WHERE id=?').get(uid);
+  assert.equal(row.points, 8);
+  assert.equal(row.streak, 0);
+  const board = store.leaderboard();
+  assert.equal(board[0].username, 'points_fan');
+  assert.ok(board[0].points >= board[1]?.points);
+  // 回放：参与者可读完整动作序列，非参与者读不到
+  const gameId = store.db.prepare('SELECT id FROM games WHERE room_code=?').get('P001').id;
+  const rep = store.replay(gameId, uid);
+  assert.equal(rep.ok, true);
+  assert.equal(rep.actions.length, 2);
+  assert.equal(rep.actions[0].a, 'flip');
+  assert.equal(store.replay(gameId, uid + 999).ok, false);
+});
+
 test.after(() => {
   store.db.close();
   rmSync(dir, { recursive: true, force: true });

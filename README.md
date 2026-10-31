@@ -10,7 +10,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22+-339933?logo=node.js&logoColor=white)](https://nodejs.org)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
 [![Socket.IO](https://img.shields.io/badge/Socket.IO-4-white?logo=socket.io)](https://socket.io)
-[![Tests](https://img.shields.io/badge/Tests-24%20passing-3DDC84)](#-测试)
+[![Tests](https://img.shields.io/badge/Tests-27%20passing-3DDC84)](#-测试)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)](https://github.com/Qiu-LingYan/uno-game/pulls)
 
 <br>
@@ -25,7 +25,13 @@
 
 UNO Party 是一个完整的在线 UNO 对战平台：纯函数规则引擎保证每一局判定一致且可独立单测，Socket.IO 提供毫秒级的房间状态广播，SQLite 让整个服务零运维、可跑在小到 64MB 堆上限的进程里。
 
-- **完整规则引擎** — 变色、跳过、反转、+2/+4、可叠加惩罚（+2 叠 +2、+4 见 +2 就加）、摸到能出就继续出、抓 UNO 惩罚、二人局反转等价跳过（官方规则）、胜利判定，全部由不碰 IO 与时钟的纯函数引擎驱动，24 项单测覆盖。
+- **音效与静音** — WebAudio 实时合成出牌 / 摸牌 / 喊 UNO / 抓 UNO / 胜利音效（零音频资源文件），牌桌内一键静音并记忆偏好。
+- **单机练手** — 免登录一键开局，与 3 个机器人同桌对战，走与在线对局完全相同的规则引擎。
+- **私密房与公开房间列表** — 创建房间可设密码（≤24 字符）成为私密房；登录房主可把房间挂上公开列表，大厅实时展示等待中的公开房（房名、人数、是否有密码），加入公开房须登录。
+- **积分赛季排行榜** — 每局胜者按连击获得积分（+3 起，连胜加成封顶 +7），败者也有一分安慰分；排行榜优先按积分排序，个人中心与战绩弹窗展示积分。
+- **对局回放** — 每局自动记录最多 600 条动作序列（翻牌 / 出牌 / 摸牌 / 留牌 / UNO / 抓 UNO），对局结束后可从个人中心逐步回放每一手，仅参与者可查看。
+- **观战者互动** — 观战席可发表情弹幕（8 个白名单 emoji，限速防刷屏），与玩家共享房间通知流。
+- **完整规则引擎** — 变色、跳过、反转、+2/+4、可叠加惩罚（+2 叠 +2、+4 见 +2 就加）、摸到能出就继续出、抓 UNO 惩罚、二人局反转等价跳过（官方规则）、胜利判定，全部由不碰 IO 与时钟的纯函数引擎驱动，27 项单测覆盖。
 - **60 秒回合计时** — 轮到真人自动开始倒计时（剩 15 秒变红警示），超时自动出牌 / 摸牌并向全房间播报；机器人回合不占倒计时，1–3 秒随机节奏出牌。
 - **机器人补位** — 人不够可在大厅一键添加 / 移除机器人（最多 7 座），与真人走同一规则引擎与计时器；抓 UNO 与喊 UNO 均为延迟概率行为，给真人留出真实反应窗口。
 - **战绩与排行榜** — 公开胜率榜（大厅免登录可查）、个人中心最近 10 局对局记录、独立战绩存档；机器人不污染榜单。
@@ -76,9 +82,9 @@ flowchart LR
 | 模块 | 职责 |
 |---|---|
 | `server/game.js` | 纯函数 UNO 规则引擎：不碰 IO、不碰时钟（时间由外部注入），可独立单测 |
-| `server/index.js` | Socket.IO 房间生命周期：座位恢复、旁观席转正、votekick 计时、回合计时与机器人调度、房间 TTL 清扫 |
-| `server/store.js` | SQLite 持久层：账号、会话 token、对局战绩 |
-| `src/main.jsx` | 单文件 React 前端：错误 toast、UNO 突脸、变色 modal、飞牌动画、结算浮层、旁观/踢人 UI |
+| `server/index.js` | Socket.IO 房间生命周期：座位恢复、旁观席转正、votekick 计时、回合计时与机器人调度、房间 TTL 清扫、表情弹幕、对局动作日志 |
+| `server/store.js` | SQLite 持久层：账号、会话 token、积分与连击、对局战绩与回放 |
+| `src/main.jsx` | 单文件 React 前端：错误 toast、UNO 突脸、变色 modal、飞牌动画、结算浮层、WebAudio 音效、单机模式、密码房 / 公开房列表、回放 stepper、旁观/踢人 UI |
 
 ## 快速开始
 
@@ -129,7 +135,7 @@ npm run smoke   # 双客户端加入同一房间并同步出牌、摸牌动作
 欢迎 Issue 与 PR。提交前请确保：
 
 ```sh
-npm test    # 24 项测试全部通过
+npm test    # 27 项测试全部通过
 ```
 
 ## License

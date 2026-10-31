@@ -2,7 +2,7 @@ import express from "express";
 import http from "http";
 import { Server } from "socket.io";
 import { newGame, playCard, drawCards, callUno, catchUno, keepDrawn, removePlayerFromState, rebindPlayerId, publicState, canPlay, COLORS } from "./game.js";
-import { prepareRegistration, confirmRegistration, login, getUser, logout, profile, updateNickname, recordGame, publicProfile, leaderboard, recentGames } from "./store.js";
+import { prepareRegistration, confirmRegistration, login, getUser, logout, profile, updateNickname, recordGame, publicProfile, leaderboard, recentGames, replay } from "./store.js";
 
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS = 7;   // 单房间座位上限（旁观席另限 8）
@@ -88,8 +88,28 @@ app.get("/api/profile", (req, res) => {
   res.json({ ...profile(user.id), recent: recentGames(user.id) });
 });
 
-// 排行榜（公开）：胜率优先
+// 排行榜（公开）：积分优先
 app.get("/api/leaderboard", (_req, res) => res.json(leaderboard()));
+
+// 公开房间列表（公开）：只列房主已登录且创建时勾选「公开」的房间
+app.get("/api/rooms", (_req, res) => {
+  const list = [];
+  for (const [code, room] of rooms) {
+    if (!room.isPublic || !room.players[0]?.userId) continue;
+    list.push({ code, players: room.players.length, started: room.started, hasPassword: !!room.password, host: room.players[0].name });
+    if (list.length >= 20) break;
+  }
+  res.json(list);
+});
+
+// 对局回放：仅该局参与者可读
+app.get("/api/replay/:id", (req, res) => {
+  const user = authFromRequest(req);
+  if (!user) return res.status(401).json({ error: "请先登录" });
+  const r = replay(req.params.id, user.id);
+  if (!r.ok) return res.status(404).json(r);
+  res.json(r);
+});
 app.patch("/api/profile", (req, res) => {
   const user = authFromRequest(req);
   if (!user) return res.status(401).json({ error: "请先登录" });
@@ -236,13 +256,20 @@ function saveFinishedGame(room, code) {
   if (!room?.state?.winner || room.saved) return;
   try {
     recordGame(code, room.startedAt, Date.now(), room.players.map(player => player.id), room.state.winner,
-      id => room.seatUsers?.[id] ?? socketUsers.get(id)?.id ?? null);
+      id => room.seatUsers?.[id] ?? socketUsers.get(id)?.id ?? null, room.log);
     room.saved = true;
   } catch (error) {
     // 结算失败不能崩掉进程；saved 不置位，下次触发可重试
     console.error("recordGame failed:", error);
   }
 }
+
+// 对局动作记录（回放用）：只存必要字段，超上限停止记录防止内存膨胀
+function logAct(room, entry) {
+  if (!room.log || room.log.length > 600) return;
+  room.log.push({ t: Math.round((Date.now() - (room.startedAt || Date.now())) / 1000), ...entry });
+}
+const seatName = (room, id) => room.players.find(p => p.id === id)?.name || "玩家";
 
 io.use((socket, next) => {
   const auth = socket.handshake.auth || {};
@@ -302,16 +329,19 @@ function autoAct(room, code, { silent = false } = {}) {
     const card = state.hands[pid][idx];
     const r = playCard(state, pid, idx, card.color === "wild" ? chosenColorFor(state, pid) : undefined);
     if (!r.ok) idx = -1;
+    else logAct(room, { a: "play", n: name, card: state.discard[state.discard.length - 1], color: state.activeColor });
   }
   if (idx === -1) {
     const r = drawCards(state, pid);
     if (!r.ok) return false;
+    logAct(room, { a: "draw", n: name, k: r.drawn });
     moved = state.pendingDraw === 0 && r.drawn ? "自动摸牌" : `摸了 ${r.drawn} 张`;
     // 主动摸 1 张且可出：超时规则为直接打出
     if (r.mayPlay) {
       const drawnIdx = state.mayPlayDrawn;
       const card = state.hands[pid][drawnIdx];
       playCard(state, pid, drawnIdx, card.color === "wild" ? chosenColorFor(state, pid) : undefined);
+      logAct(room, { a: "play", n: name, card: state.discard[state.discard.length - 1], color: state.activeColor });
       moved = "超时打出刚摸的牌";
     }
     // 喊 UNO 不在这里立即执行：交给 tick 循环延迟触发，留出抓 UNO 窗口
@@ -435,7 +465,7 @@ function removePlayer(socketId, code, room, { explicitLeave = false } = {}) {
 
 io.on("connection", (socket) => {
   if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
-  socket.on("createRoom", ({ name, code: preferredCode }, cb) => {
+  socket.on("createRoom", ({ name, code: preferredCode, password, public: publicReq }, cb) => {
     const upper = String(preferredCode || "").toUpperCase();
     const clientId = socket.data.clientId;
     const userId = socket.data.user?.id;
@@ -483,13 +513,16 @@ io.on("connection", (socket) => {
     // 创建新房间
     let code = upper || genCode();
     if (rooms.has(code)) return cb?.({ ok: false, error: "房间码已存在" });
-
+    // 私密房：可选密码；公开房：仅登录房主可勾选（进入公开列表，加入者必须登录）
+    const pwd = String(password || "").trim();
     const roomName = socket.data.user?.nickname || name || "玩家1";
     rooms.set(code, {
       players: [{ id: socket.id, name: roomName, clientId, userId, username: socket.data.user?.username || null, disconnectedAt: null }],
       spectators: [],
       state: null,
       started: false,
+      password: pwd ? pwd.slice(0, 24) : null,
+      isPublic: Boolean(publicReq) && Boolean(userId),
       lastActivity: Date.now()
     });
     if (socket.data.user) socketUsers.set(socket.id, socket.data.user);
@@ -499,7 +532,7 @@ io.on("connection", (socket) => {
     socket.emit("state", { room: code, players: room.players.map(x => x.name), started: false, handCounts: {}, turn: null });
   });
 
-  socket.on("joinRoom", ({ code, name }, cb) => {
+  socket.on("joinRoom", ({ code, name, password }, cb) => {
     const upper = String(code || "").toUpperCase();
     const room = rooms.get(upper);
     if (!room) return cb?.({ ok: false, error: "房间不存在" });
@@ -574,6 +607,9 @@ io.on("connection", (socket) => {
     }
 
     // 新座位：对局进行中加入的人当旁观者，本轮结束后未满员自动转正
+    // 公开房间加入者必须登录；私密房密码校验（原座位重连恢复不要求重输密码）
+    if (room.isPublic && !socket.data.user) return cb?.({ ok: false, error: "公开房间需登录后加入" });
+    if (room.password && String(password || "") !== room.password) return cb?.({ ok: false, error: "房间密码错误" });
     const joinName = socket.data.user?.nickname || name || `玩家${room.players.length + 1}`;
     if (room.started) {
       if (room.spectators.length >= 8) return cb?.({ ok: false, error: "旁观席已满" });
@@ -620,6 +656,7 @@ io.on("connection", (socket) => {
     // 开局即固定 userId 映射：对局中登出/断线导致 socketUsers 清理后，结算仍能记到战绩
     room.seatUsers = Object.fromEntries(room.players.map(p => [p.id, p.userId || null]));
     room.state = newGame(room.players.map(p => p.id));
+    room.log = [{ t: 0, a: "flip", n: seatName(room, room.state.players[0]), card: room.state.discard[room.state.discard.length - 1], color: room.state.activeColor }];
     resetTurnTimer(room);
     broadcast(room, code);
     cb?.({ ok: true });
@@ -653,6 +690,7 @@ io.on("connection", (socket) => {
     if (!room?.state) return;
     const r = playCard(room.state, socket.id, cardIndex, chosenColor);
     if (!r.ok) return socket.emit("error-msg", { error: r.error });
+    logAct(room, { a: "play", n: seatName(room, socket.id), card: room.state.discard[room.state.discard.length - 1], color: room.state.activeColor });
     afterAction(room, code);
   });
 
@@ -661,6 +699,7 @@ io.on("connection", (socket) => {
     if (!room?.state) return;
     const r = drawCards(room.state, socket.id);
     if (!r.ok) return socket.emit("error-msg", { error: r.error });
+    logAct(room, { a: "draw", n: seatName(room, socket.id), k: r.drawn });
     afterAction(room, code);
   });
 
@@ -671,6 +710,7 @@ io.on("connection", (socket) => {
     if (!result.ok) return cb?.(result);
     touch(room);
     room.unoCatches = (room.unoCatches || 0) + 1;
+    logAct(room, { a: "uno", n: seatName(room, socket.id) });
     broadcast(room, code);
     // 全房间突脸：UNO！
     const pname = room.players.find(p => p.id === socket.id)?.name || "有人";
@@ -700,6 +740,7 @@ io.on("connection", (socket) => {
     const result = catchUno(room.state, socket.id);
     if (!result.ok) return cb?.(result);
     touch(room);
+    logAct(room, { a: "catch", n: seatName(room, socket.id), t2: seatName(room, result.target) });
     broadcast(room, code);
     cb?.({ ok: true, target: result.target });
   });
@@ -709,8 +750,25 @@ io.on("connection", (socket) => {
     if (!room?.state) return cb?.({ ok: false, error: "game not started" });
     const result = keepDrawn(room.state, socket.id);
     if (!result.ok) return cb?.(result);
+    logAct(room, { a: "keep", n: seatName(room, socket.id) });
     afterAction(room, code);
     cb?.({ ok: true });
+  });
+
+  // 表情互动：全房间（含观战者）可发，服务端白名单 + 1.5s 限速，经 roomNotice 弹幕展示，零存储
+  const EMOTES = new Set(["👍", "😂", "😱", "🔥", "👏", "🙃", "😎", "🎉"]);
+  socket.on("emote", ({ code, emoji }) => {
+    const upperCode = String(code || "").toUpperCase();
+    const room = rooms.get(upperCode);
+    if (!room || !EMOTES.has(emoji)) return;
+    const now = Date.now();
+    if (now < (socket.data.lastEmote || 0) + 1500) return;
+    const who = room.players.find(p => p.id === socket.id)?.name
+      || (room.spectators || []).find(p => p.id === socket.id)?.name;
+    if (!who) return;
+    socket.data.lastEmote = now;
+    touch(room);
+    io.to(upperCode).emit("roomNotice", { text: `💬 ${who}: ${emoji}` });
   });
 
   socket.on("leaveRoom", ({ code }, cb) => {

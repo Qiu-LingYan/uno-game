@@ -296,3 +296,34 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 .nickModal .nickInput{width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;border:1px solid #34363d;background:#111216;color:#f7f5f2;font-size:16px;margin:12px 0 16px;outline:none}
 .nickModal .nickInput:focus{border-color:var(--primary)}
 .nickModal .nickActions{display:flex;gap:10px;justify-content:flex-end}
+
+/* ---- 音效开关 / 表情条 ---- */
+.muteBtn{padding:0 14px;min-width:48px}
+.emoteBar{display:flex;justify-content:center;gap:6px;margin:8px 0;flex-wrap:wrap}
+.emoteBar button{border:1px solid var(--border);background:var(--panel);border-radius:10px;font-size:17px;padding:4px 10px;transition:transform .12s}
+.emoteBar button:active{transform:scale(1.25)}
+
+/* ---- 创建房间选项 / 公开房间列表 / 单机入口 ---- */
+.createOpts{display:flex;gap:10px;margin-top:10px}
+.createOpts input[type=password]{flex:1;min-width:0;height:44px;border:1px solid var(--border);background:#171226;color:var(--text);border-radius:12px;padding:0 14px;outline:none;font-size:16px}
+.createOpts input[type=password]:focus{border-color:var(--primary-2)}
+.pubToggle{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:13px;font-weight:700;white-space:nowrap;cursor:pointer}
+.pubToggle input{width:18px;height:18px;accent-color:var(--primary)}
+.roomList{display:flex;flex-direction:column;gap:6px;max-height:180px;overflow-y:auto}
+.roomRow{display:flex;align-items:center;gap:10px;background:#171226;border:1px solid var(--border);border-radius:10px;padding:8px 12px}
+.roomRow b{letter-spacing:.15em;font-size:14px}
+.roomRow span{flex:1;color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.roomRow button{border:0;background:linear-gradient(135deg,var(--primary),var(--primary-2));color:#fff;border-radius:8px;padding:6px 14px;font-weight:800;font-size:12px}
+.soloEntry{border-color:var(--primary-2);border-style:solid}
+.entryGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+.entryGrid .boardEntry,.entryGrid .authEntry{margin-top:0}
+@media(max-width:420px){.entryGrid .boardEntry b,.entryGrid .authEntry b{font-size:14px}}
+
+/* ---- 对局回放 ---- */
+.replayBtn{flex-shrink:0}
+.replayModal{min-width:300px;max-width:92vw}
+.replayBoard{display:flex;align-items:center;justify-content:center;gap:18px;margin:14px 0;min-height:120px}
+.replayPending{color:#f4c86a;font-weight:800;font-size:13px}
+.replayDesc{text-align:center;font-weight:800;font-size:14px;min-height:22px;margin:6px 0 12px}
+.replayNav{display:flex;align-items:center;justify-content:center;gap:14px}
+.replayNav span{color:var(--muted);font-size:13px;font-weight:700}

@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS game_players (
  game_id INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
  user_id INTEGER NOT NULL REFERENCES users(id), won INTEGER NOT NULL,
  PRIMARY KEY (game_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS game_replays (
+ game_id INTEGER PRIMARY KEY REFERENCES games(id) ON DELETE CASCADE,
+ actions TEXT NOT NULL
 );`);
 
 const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map(column => column.name));
@@ -47,6 +51,11 @@ if (!userColumns.has('username')) {
 }
 const pendingColumns = new Set(db.prepare('PRAGMA table_info(pending_registrations)').all().map(column => column.name));
 if (!pendingColumns.has('username')) db.exec("ALTER TABLE pending_registrations ADD COLUMN username TEXT NOT NULL DEFAULT 'player'");
+// 积分赛季（2026-10-31）：胜 +3+连击加成（连击每 +1 多 1 分，封顶 +7），负 +1 保底；排行榜按积分排序
+if (!userColumns.has('points')) {
+  db.exec('ALTER TABLE users ADD COLUMN points INTEGER NOT NULL DEFAULT 0');
+  db.exec('ALTER TABLE users ADD COLUMN streak INTEGER NOT NULL DEFAULT 0');
+}
 
 // 高频 SQL 全部模块级预编译，避免每次调用重复 prepare
 const q = {
@@ -68,13 +77,13 @@ const q = {
   userBySession: db.prepare('SELECT u.id,u.email,u.username,u.nickname FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?'),
   deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash=?'),
   updateNickname: db.prepare('UPDATE users SET nickname=? WHERE id=?'),
-  profile: db.prepare(`SELECT u.email,u.username,u.nickname,u.created_at AS memberSince, COUNT(gp.game_id) AS gamesPlayed,
+  profile: db.prepare(`SELECT u.email,u.username,u.nickname,u.points,u.created_at AS memberSince, COUNT(gp.game_id) AS gamesPlayed,
     COALESCE(SUM(gp.won),0) AS wins,
     CASE WHEN COUNT(gp.game_id)=0 THEN 0 ELSE ROUND(100.0*SUM(gp.won)/COUNT(gp.game_id),1) END AS winRate,
     COALESCE(SUM(g.duration_seconds),0) AS playSeconds
     FROM users u LEFT JOIN game_players gp ON gp.user_id=u.id
     LEFT JOIN games g ON g.id=gp.game_id WHERE u.id=? GROUP BY u.id`),
-  publicProfile: db.prepare(`SELECT u.username,u.nickname,u.created_at AS memberSince, COUNT(gp.game_id) AS gamesPlayed,
+  publicProfile: db.prepare(`SELECT u.username,u.nickname,u.points,u.created_at AS memberSince, COUNT(gp.game_id) AS gamesPlayed,
     COALESCE(SUM(gp.won),0) AS wins,
     CASE WHEN COUNT(gp.game_id)=0 THEN 0 ELSE ROUND(100.0*SUM(gp.won)/COUNT(gp.game_id),1) END AS winRate,
     COALESCE(SUM(g.duration_seconds),0) AS playSeconds
@@ -82,15 +91,19 @@ const q = {
     LEFT JOIN games g ON g.id=gp.game_id WHERE u.username=? COLLATE NOCASE GROUP BY u.id`),
   insertGame: db.prepare('INSERT INTO games(room_code,started_at,ended_at,duration_seconds) VALUES(?,?,?,?)'),
   insertGamePlayer: db.prepare('INSERT OR IGNORE INTO game_players(game_id,user_id,won) VALUES(?,?,?)'),
-  leaderboard: db.prepare(`SELECT u.username,u.nickname, COUNT(gp.game_id) AS gamesPlayed,
+  winScore: db.prepare('UPDATE users SET streak=streak+1, points=points+3+MIN(streak,4) WHERE id=?'),
+  loseScore: db.prepare("UPDATE users SET streak=0, points=points+1 WHERE id=?"),
+  insertReplay: db.prepare('INSERT OR REPLACE INTO game_replays(game_id,actions) VALUES(?,?)'),
+  replay: db.prepare('SELECT r.actions FROM game_replays r JOIN game_players gp ON gp.game_id=r.game_id AND gp.user_id=? WHERE r.game_id=?'),
+  leaderboard: db.prepare(`SELECT u.username,u.nickname,u.points,u.streak, COUNT(gp.game_id) AS gamesPlayed,
     COALESCE(SUM(gp.won),0) AS wins,
     CASE WHEN COUNT(gp.game_id)=0 THEN 0 ELSE ROUND(100.0*SUM(gp.won)/COUNT(gp.game_id),1) END AS winRate,
     COALESCE(SUM(g.duration_seconds),0) AS playSeconds
     FROM users u JOIN game_players gp ON gp.user_id=u.id
     JOIN games g ON g.id=gp.game_id GROUP BY u.id
     HAVING gamesPlayed > 0
-    ORDER BY winRate DESC, gamesPlayed DESC, playSeconds DESC LIMIT 20`),
-  recentGames: db.prepare(`SELECT g.room_code, g.duration_seconds, g.ended_at, gp.won
+    ORDER BY points DESC, winRate DESC, gamesPlayed DESC, playSeconds DESC LIMIT 20`),
+  recentGames: db.prepare(`SELECT g.id, g.room_code, g.duration_seconds, g.ended_at, gp.won
     FROM game_players gp JOIN games g ON g.id=gp.game_id
     WHERE gp.user_id=? ORDER BY g.ended_at DESC LIMIT 10`),
 };
@@ -230,18 +243,31 @@ export function publicProfile(username) {
   return q.publicProfile.get(name) || null;
 }
 
-export function recordGame(roomCode, startedAt, endedAt, playerIds, winnerId, userIdBySocket) {
+export function recordGame(roomCode, startedAt, endedAt, playerIds, winnerId, userIdBySocket, actions) {
   const duration = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
   db.exec('BEGIN IMMEDIATE');
   try {
     const gameId = Number(q.insertGame.run(roomCode, startedAt, endedAt, duration).lastInsertRowid);
     for (const socketId of playerIds) {
       const userId = userIdBySocket(socketId);
-      if (userId) q.insertGamePlayer.run(gameId, userId, socketId === winnerId ? 1 : 0);
+      if (!userId) continue;
+      q.insertGamePlayer.run(gameId, userId, socketId === winnerId ? 1 : 0);
+      // 积分：胜 +3+连击加成（封顶 +7），负 +1；机器人/游客无账号不计
+      if (socketId === winnerId) q.winScore.run(userId); else q.loseScore.run(userId);
     }
+    if (Array.isArray(actions) && actions.length) q.insertReplay.run(gameId, JSON.stringify(actions));
     db.exec('COMMIT');
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;
   }
+}
+
+// 对局回放：仅参与者可读
+export function replay(gameId, userId) {
+  const row = q.replay.get(userId, Number(gameId) || 0);
+  if (!row) return { ok: false, error: '回放不存在' };
+  let actions;
+  try { actions = JSON.parse(row.actions); } catch { return { ok: false, error: '回放数据损坏' }; }
+  return { ok: true, actions };
 }

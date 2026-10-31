@@ -85,7 +85,7 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 .corner{position:absolute;z-index:1;top:5px;left:7px;font-size:11px;font-weight:900}
 .corner.bottom{top:auto;left:auto;bottom:5px;right:7px;transform:rotate(180deg)}
 .turn{text-align:center;margin:16px 0;color:#eebdba;font-size:15px;font-weight:800;min-height:22px}
-.hand{display:flex;justify-content:flex-start;gap:6px;min-height:150px;padding:8px 4px;overflow-x:auto;scroll-snap-type:x proximity;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.hand{display:flex;justify-content:flex-start;gap:6px;min-height:150px;padding:18px 4px 8px;overflow-x:auto;scroll-snap-type:x proximity;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .hand::-webkit-scrollbar{display:none}
 .hand>*{scroll-snap-align:center;flex-shrink:0}
 .cardButton{background:none;border:0;padding:4px;transition:transform .15s}
@@ -258,7 +258,7 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
   .opponent small{display:none}
   .cardCount{min-width:20px;padding:1px 5px;font-size:11px}
   .turn{font-size:13px;margin:10px 0}
-  .hand{gap:2px;min-height:118px;padding:6px 2px}
+  .hand{gap:2px;min-height:124px;padding:14px 2px 6px}
   .createOpts{flex-wrap:wrap}
   .createOpts .pubToggle{flex:1 1 100%;justify-content:center;gap:10px}
   .gameActions,.drawnActions,.unoCatch{position:static;margin-top:12px;padding:0 10px}

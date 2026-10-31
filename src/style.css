@@ -71,6 +71,7 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 .opponent.active{border-color:var(--primary-2);box-shadow:0 0 18px #6647e055}
 .avatarSmall{width:34px;height:34px;font-size:14px}
 .opponent small{margin-left:auto;color:var(--muted);white-space:nowrap}
+.cardCount{margin-left:auto;min-width:24px;text-align:center;background:rgba(102,71,224,.18);border:1px solid var(--border);border-radius:8px;padding:2px 6px;font-weight:800;color:#cec6e1;font-size:12px}
 .center{min-height:260px;display:flex;align-items:center;justify-content:center;gap:48px;background:radial-gradient(ellipse at center,#29203f 0%,#1d1730 55%,transparent 78%);border-radius:32px}
 .pile,.discard{display:flex;flex-direction:column;align-items:center;gap:10px;color:#b3a3f0;font-size:11px;font-weight:700}
 .pile{cursor:pointer;border-radius:20px;padding:10px;transition:transform .15s}
@@ -224,6 +225,7 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
   .cardButton{padding:6px 2px}
   .opponent{min-width:0;padding:8px;font-size:10px;gap:6px}
   .opponent small{display:none}
+  .cardCount{min-width:20px;padding:1px 5px;font-size:11px}
   .turn{font-size:13px;margin:10px 0}
   .hand{gap:2px;min-height:118px;padding:6px 2px}
   .gameActions,.drawnActions,.unoCatch{position:sticky;bottom:10px;z-index:10}

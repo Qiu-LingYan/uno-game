@@ -260,7 +260,7 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
   .turn{font-size:13px;margin:10px 0}
   .hand{gap:2px;min-height:118px;padding:6px 2px}
   .createOpts{flex-wrap:wrap}
-  .pubToggle{flex:1 1 100%;justify-content:center;gap:10px}
+  .createOpts .pubToggle{flex:1 1 100%;justify-content:center;gap:10px}
   .gameActions,.drawnActions,.unoCatch{position:static;margin-top:12px;padding:0 10px}
   .gameActions button,.drawnActions button,.catchButton{flex:1;max-width:220px}
   .colorModal{padding:22px 16px}
@@ -314,13 +314,13 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 .createOpts{display:flex;gap:10px;margin-top:10px}
 .createOpts input[type=password]{flex:1;min-width:0;height:44px;border:1px solid var(--border);background:#171226;color:var(--text);border-radius:12px;padding:0 14px;outline:none;font-size:16px}
 .createOpts input[type=password]:focus{border-color:var(--primary-2)}
-.pubToggle{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:13px;font-weight:700;white-space:nowrap;cursor:pointer;flex-shrink:0;padding:0 12px;height:44px;border:1px solid var(--border);border-radius:12px;background:#171226;transition:border-color .15s,color .15s}
-.pubToggle:has(input:checked){border-color:var(--primary-2);color:var(--text);background:#241c3a}
-.pubToggle:has(input:disabled){opacity:.55}
-.pubToggle input{appearance:none;-webkit-appearance:none;width:32px;height:18px;border-radius:999px;background:#3a3358;position:relative;transition:background .15s;flex-shrink:0}
-.pubToggle input::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .15s}
-.pubToggle input:checked{background:var(--primary)}
-.pubToggle input:checked::after{left:16px}
+.createOpts .pubToggle{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:13px;font-weight:700;white-space:nowrap;cursor:pointer;flex-shrink:0;padding:0 12px;height:44px;border:1px solid var(--border);border-radius:12px;background:#171226;transition:border-color .15s,color .15s;margin-bottom:0}
+.createOpts .pubToggle:has(input:checked){border-color:var(--primary-2);color:var(--text);background:#241c3a}
+.createOpts .pubToggle:has(input:disabled){opacity:.55}
+.createOpts .pubToggle input{appearance:none;-webkit-appearance:none;width:32px;height:18px;border-radius:999px;background:#3a3358;position:relative;transition:background .15s;flex-shrink:0;margin:0;padding:0;border:0}
+.createOpts .pubToggle input::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:left .15s}
+.createOpts .pubToggle input:checked{background:var(--primary)}
+.createOpts .pubToggle input:checked::after{left:16px}
 .pubRoomsLink{display:block;width:100%;margin-top:12px;background:none;border:0;color:#a99bd6;font-size:13px;font-weight:700;text-align:center;cursor:pointer;text-decoration:underline;text-underline-offset:3px;text-decoration-color:#a99bd666}
 .pubRoomsLink:active{color:#fff}
 .roomEmpty{text-align:center;color:var(--muted);font-size:12px;margin:10px 0 0}

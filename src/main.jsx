@@ -205,6 +205,15 @@ function App() {
     if (game.pendingDraw > 0) return card.value === 'wild4' || (card.value === 'draw2' && game.top.value === 'draw2');
     return card.color === 'wild' || card.color === game.activeColor || card.value === game.top.value;
   };
+  const [fly, setFly] = useState(null);
+  const flyFrom = (card, i) => {
+    const el = document.querySelectorAll('.hand .cardButton .card')[i];
+    const dst = document.querySelector('.discardCard');
+    if (!el || !dst) return;
+    const a = el.getBoundingClientRect(), b = dst.getBoundingClientRect();
+    setFly({ card, x: a.left, y: a.top, w: a.width, h: a.height, tx: b.left - a.left, ty: b.top - a.top, sw: b.width / a.width, sh: b.height / a.height });
+    setTimeout(() => setFly(null), 400);
+  };
   const play = i => {
     const card = game.yourHand[i];
     // 先判可玩性：叠加期不可出的变色牌不弹选色窗，直接提示
@@ -213,9 +222,10 @@ function App() {
       return setError(`这张牌不能出：需要 ${colorNames[game.activeColor] || '同色'}的牌，或与弃牌同数字/功能（${labels[game.top.value] || game.top.value}），或打出变色牌`);
     }
     if (card.color === 'wild') { setPickIndex(i); return; }
+    flyFrom(card, i);
     socket.emit('playCard', { code: roomCode, cardIndex: i });
   };
-  const playWild = chosenColor => { socket.emit('playCard', { code: roomCode, cardIndex: pickIndex, chosenColor }); setPickIndex(null); };
+  const playWild = chosenColor => { flyFrom(game.yourHand?.[pickIndex], pickIndex); socket.emit('playCard', { code: roomCode, cardIndex: pickIndex, chosenColor }); setPickIndex(null); };
   const draw = () => socket.emit('draw', { code: roomCode });
   const keepDrawn = () => socket.emit('keepDrawn', { code: roomCode });
   const catchUnoBtn = () => socket.emit('catchUno', { code: roomCode }, r => { if (!r.ok) show(r.error); else setError('抓到了！对方罚摸两张'); });
@@ -232,6 +242,7 @@ function App() {
   return <main className="shell"><header><div className="brand"><span className="logo">U</span><div><b>UNO PARTY</b><small>在线派对 · 2—7 位玩家</small></div></div><div className="headerRight"><span className={connected ? 'status on' : 'status'}>● {connected ? '已连接' : '连接中'}</span>{user ? <button className="profileLink" onClick={openProfile}>{user.email} · 个人中心</button> : <button className="profileLink" onClick={goLogin}>登录 / 注册</button>}</div></header>
     {error && <div className="toast">{error}</div>}
     {unoFlash && <div className="unoFlash"><span>UNO！</span><small>{unoFlash} 只剩一张牌</small></div>}
+    {fly && <div className="flyCard" style={{ left: fly.x, top: fly.y, width: fly.w, height: fly.h, '--tx': fly.tx + 'px', '--ty': fly.ty + 'px', '--sw': fly.sw, '--sh': fly.sh }}><Card card={fly.card}/></div>}
     {connecting && <div className="modalBackdrop"><div className="colorModal connectModal"><div className="spinner"/><p>正在连接…</p><p className="authHint">正在加入房间，请稍候</p></div></div>}
     {nickModal && <div className="modalBackdrop" onClick={() => setNickModal(null)}><div className="colorModal nickModal" onClick={e => e.stopPropagation()}><p>{nickModal.action === 'create' ? '创建房间' : '加入房间'}</p><p className="authHint">游客也可以自定义昵称，牌桌上会显示它</p><input className="nickInput" maxLength="18" autoFocus value={nickInput} onChange={e => setNickInput(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') confirmNick(); }} placeholder="输入昵称（可留空，默认为“玩家”）"/><div className="nickActions"><button className="pickCancel" onClick={() => setNickModal(null)}>取消</button><button className="primary" onClick={confirmNick}>{nickModal.action === 'create' ? '创建并进入' : '加入房间'}</button></div></div></div>}
     {pickIndex !== null && <div className="modalBackdrop" onClick={() => setPickIndex(null)}><div className="colorModal" onClick={e => e.stopPropagation()}><p>为变色牌选择颜色</p><div className="colorOptions">{[['red','红色'],['yellow','黄色'],['green','绿色'],['blue','蓝色']].map(([c,label]) => <button key={c} className={'pick '+c} onClick={() => playWild(c)}><i/>{label}</button>)}</div><button className="pickCancel" onClick={() => setPickIndex(null)}>取消</button></div></div>}

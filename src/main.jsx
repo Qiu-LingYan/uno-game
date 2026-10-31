@@ -105,7 +105,7 @@ function App() {
   const [muteState, setMuteState] = useState(muted);   // 音效开关（localStorage 持久化）
   const [roomPwd, setRoomPwd] = useState('');          // 创建房间可选密码
   const [pubRoom, setPubRoom] = useState(false);       // 创建公开房间（须登录）
-  const [roomList, setRoomList] = useState(null);      // 公开房间列表
+  const [roomList, setRoomList] = useState([]);        // 公开房间列表（空数组起，避免首屏 null.map 崩溃）
   const [pwdModal, setPwdModal] = useState(null);      // 加入加密房输密码 { code }
   const [pwdInput, setPwdInput] = useState('');
   const [replay, setReplay] = useState(null);          // 对局回放 { actions }

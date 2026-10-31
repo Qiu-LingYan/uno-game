@@ -131,7 +131,7 @@ function isBot(p) { return !!p?.bot; }
 function resetTurnTimer(room) {
   const pid = room.state && !room.state.winner ? room.state.players[room.state.turn] : null;
   const seat = room.players.find(p => p.id === pid);
-  room.turnDeadline = pid ? Date.now() + (isBot(seat) ? 1500 + Math.floor(Math.random() * 1500) : TURN_MS) : null;
+  room.turnDeadline = pid ? Date.now() + (isBot(seat) ? 0 : TURN_MS) : null;
 }
 
 // 座位匹配：登录用户按 userId，匿名玩家按 clientId（前端持久化，刷新不丢状态）
@@ -306,8 +306,8 @@ function afterAction(room, code) {
   if (room.state?.winner) {
     room.turnDeadline = null;
     saveFinishedGame(room, code);
+    // 保留牌桌结算画面，由房主点「再来一局」开启下一轮
     broadcast(room, code);
-    setTimeout(() => { if (rooms.get(code) === room && room.state?.winner) endRound(room, code); }, 3000).unref();
     return;
   }
   resetTurnTimer(room);
@@ -320,7 +320,7 @@ setInterval(() => {
     if (!room.started || !room.state || room.state.winner) continue;
     const state = room.state;
     // Bot 顺手抓 UNO：60% 概率在窗口内抓未喊 UNO 的真人/其他玩家
-    if (state.unoVulnerable && now < state.unoVulnerable.deadline && Math.random() < 0.25) {
+    if (state.unoVulnerable && now < state.unoVulnerable.deadline && Math.random() < 0.07) {
       const bot = room.players.find(p => p.bot && p.id !== state.unoVulnerable.player);
       if (bot) {
         const r = catchUno(state, bot.id, now);
@@ -337,7 +337,7 @@ setInterval(() => {
     if (isBot(seat)) autoAct(room, code, { silent: true });
     else autoAct(room, code);
   }
-}, 1000).unref();
+}, 250).unref();
 
 
 function genCode() {
@@ -569,10 +569,15 @@ io.on("connection", (socket) => {
 
   socket.on("startGame", ({ code }, cb) => {
     const room = rooms.get(code);
-    if (!room || room.started || room.players.length < 2) return cb?.({ ok: false });
+    if (!room || room.players.length < 2) return cb?.({ ok: false });
+    if (room.started && !room.state?.winner) return cb?.({ ok: false });
     // 只有已占座玩家能开局：防止旁观者/路人拿到房间码替全员开始
     if (!room.players.some(p => p.id === socket.id)) return cb?.({ ok: false, error: "你不在此房间中" });
     touch(room);
+    // 上一轮已结束（再来一局）：旁观者自动转正
+    while (room.spectators?.length && room.players.length < MAX_PLAYERS) {
+      room.players.push({ ...room.spectators.shift(), disconnectedAt: null });
+    }
     room.started = true;
     room.startedAt = Date.now();
     room.saved = false;

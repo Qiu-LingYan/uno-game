@@ -9,7 +9,7 @@ const MAX_PLAYERS = 7;   // 单房间座位上限（旁观席另限 8）
 const app = express();
 const server = http.createServer(app);
 // CORS 白名单：站点自身 + 本地开发，禁止任意来源建立 WS 连接
-const ALLOWED_ORIGINS = [process.env.APP_URL || "https://chat.qiulingyan.top", "http://localhost:5173", "http://127.0.0.1:5173"];
+const ALLOWED_ORIGINS = [process.env.APP_URL || "https://uno.qiulingyan.top", "https://chat.qiulingyan.top", "http://localhost:5173", "http://127.0.0.1:5173"];
 const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS, methods: ["GET", "POST"] } });
 app.use(express.json({ limit: "16kb" }));
 app.use(express.static(new URL("../dist", import.meta.url).pathname));

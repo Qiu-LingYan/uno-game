@@ -15,7 +15,7 @@
 
 <br>
 
-[在线试玩](https://chat.qiulingyan.top) · [快速开始](#-快速开始) · [架构](#-架构) · [部署](#-生产部署) · [报告问题](https://github.com/Qiu-LingYan/uno-game/issues)
+[在线试玩](https://uno.qiulingyan.top) · [快速开始](#-快速开始) · [架构](#-架构) · [部署](#-生产部署) · [报告问题](https://github.com/Qiu-LingYan/uno-game/issues)
 
 </div>
 

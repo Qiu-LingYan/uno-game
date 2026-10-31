@@ -343,3 +343,5 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 .replayNav{display:flex;align-items:center;justify-content:center;gap:14px}
 .replayNav span{color:var(--muted);font-size:13px;font-weight:700}
 .replayVideoBtn{display:block;width:100%;margin-top:12px}
+.replayVideoHint{color:var(--muted);font-size:12px;text-align:center;margin:10px 0 0}
+.replayVideoHint a{color:#a99bd6}

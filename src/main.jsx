@@ -112,6 +112,7 @@ function App() {
   const [replay, setReplay] = useState(null);          // 对局回放 { actions }
   const [replayId, setReplayId] = useState(null);      // 当前回放对应的 game id（下载视频用）
   const [replayVideoBusy, setReplayVideoBusy] = useState(false);
+  const [replayVideoUrl, setReplayVideoUrl] = useState(null); // 签名直链（30 分钟内有效）
   const [replayIdx, setReplayIdx] = useState(0);
   const lastEmote = useRef(0);
   const prevWinner = useRef(null);
@@ -342,22 +343,19 @@ function App() {
   const sendEmote = emoji => { const t = Date.now(); if (t - lastEmote.current < 2000) return; lastEmote.current = t; socket.emit('emote', { code: roomCode, emoji }); };
   // 对局回放：仅登录参与者可看
   const openReplay = async id => {
-    try { const data = await api(`/api/replay/${id}`); setReplay(data); setReplayId(id); setReplayIdx(0); } catch (e) { setError(e.message); }
+    try { const data = await api(`/api/replay/${id}`); setReplay(data); setReplayId(id); setReplayIdx(0); setReplayVideoUrl(null); } catch (e) { setError(e.message); }
   };
-  // 回放视频：服务端纯代码生成 WebM（缓存 30 分钟），带 token 下载
+  // 回放视频：点击生成 MP4 并换回签名直链（30 分钟内免登录、换页面/设备也能下载）
   const downloadReplayVideo = async () => {
     if (replayVideoBusy) return;
     setReplayVideoBusy(true);
     try {
-      const token = localStorage.getItem('uno-token');
-      const resp = await fetch(`/api/replay/${replayId}/video`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-      if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).error || '视频生成失败');
-      const blob = await resp.blob();
+      const data = await api(`/api/replay/${replayId}/video-link`, { method: 'POST' });
+      setReplayVideoUrl(data.url);
       const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = `uno-replay-${replayId}.webm`;
+      a.href = data.url;
+      a.download = `uno-replay-${replayId}.mp4`;
       a.click();
-      URL.revokeObjectURL(a.href);
     } catch (e) { setError(e.message); }
     setReplayVideoBusy(false);
   };
@@ -399,7 +397,7 @@ function App() {
         : cur.a === 'uno' ? `${cur.n} 喊了 UNO！`
         : cur.a === 'catch' ? `${cur.n} 抓到 ${cur.t2} 的 UNO，罚摸两张`
         : '首张翻牌';
-      return <><div className="replayBoard"><div className="discard"><div className="discardCard"><Card card={top}/></div></div><div className={'colorChip ' + color}>{colorNames[color] || '变色'}</div>{pending > 0 && <span className="replayPending">待摸 {pending}</span>}</div><p className="replayDesc">{replayIdx > 0 ? `+${cur.t}s · ` : ''}{desc}</p><div className="replayNav"><button className="drawButton" disabled={replayIdx <= 0} onClick={() => setReplayIdx(replayIdx - 1)}>‹ 上一手</button><span>{replayIdx + 1} / {acts.length}</span><button className="drawButton" disabled={replayIdx >= acts.length - 1} onClick={() => setReplayIdx(replayIdx + 1)}>下一手 ›</button></div><button className="drawButton replayVideoBtn" disabled={replayVideoBusy} onClick={downloadReplayVideo}>{replayVideoBusy ? '视频生成中…' : '⬇ 下载回放视频'}</button></>;
+      return <><div className="replayBoard"><div className="discard"><div className="discardCard"><Card card={top}/></div></div><div className={'colorChip ' + color}>{colorNames[color] || '变色'}</div>{pending > 0 && <span className="replayPending">待摸 {pending}</span>}</div><p className="replayDesc">{replayIdx > 0 ? `+${cur.t}s · ` : ''}{desc}</p><div className="replayNav"><button className="drawButton" disabled={replayIdx <= 0} onClick={() => setReplayIdx(replayIdx - 1)}>‹ 上一手</button><span>{replayIdx + 1} / {acts.length}</span><button className="drawButton" disabled={replayIdx >= acts.length - 1} onClick={() => setReplayIdx(replayIdx + 1)}>下一手 ›</button></div><button className="drawButton replayVideoBtn" disabled={replayVideoBusy} onClick={downloadReplayVideo}>{replayVideoBusy ? '视频生成中…' : '⬇ 生成并下载视频 (MP4)'}</button>{replayVideoUrl && <p className="replayVideoHint">视频已生成，<a href={replayVideoUrl}>下载链接</a> 30 分钟内有效，可复制到其它设备打开。</p>}</>;
     })()}<button className="pickCancel" onClick={() => setReplay(null)}>关闭</button></div></div>}
     {pickIndex !== null && <div className="modalBackdrop" onClick={() => setPickIndex(null)}><div className="colorModal" onClick={e => e.stopPropagation()}><p>为变色牌选择颜色</p><div className="colorOptions">{[['red','红色'],['yellow','黄色'],['green','绿色'],['blue','蓝色']].map(([c,label]) => <button key={c} className={'pick '+c} onClick={() => playWild(c)}><i/>{label}</button>)}</div><button className="pickCancel" onClick={() => setPickIndex(null)}>取消</button></div></div>}
     {viewUser !== null && <div className="modalBackdrop" onClick={() => setViewUser(null)}><div className="colorModal playerModal" onClick={e => e.stopPropagation()}>{viewUser === 'guest' ? <><p className="playerModalName">游客玩家</p><p className="authHint">该玩家未登录，没有战绩档案。登录后即可在个人中心查看胜率、胜场与游玩时长。</p></> : viewData ? <><p className="eyebrow">PLAYER PROFILE</p><p className="playerModalName">{viewData.nickname}</p><p className="playerModalHandle">@{viewData.username}</p><div className="statsGrid"><Stat label="胜率" value={`${viewData.winRate}%`}/><Stat label="胜场" value={viewData.wins}/><Stat label="总场次" value={viewData.gamesPlayed}/><Stat label="累计游玩" value={playTime(viewData.playSeconds)}/></div><p className="authHint">加入时间：{(viewData.memberSince || '').slice(0, 10)}</p></> : <><p className="playerModalName">@{viewUser}</p><p className="authHint">正在加载战绩…</p></>}<button className="pickCancel" onClick={() => setViewUser(null)}>关闭</button></div></div>}

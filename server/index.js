@@ -114,9 +114,25 @@ app.get("/api/replay/:id", (req, res) => {
   res.json(r);
 });
 
-// 回放视频：纯代码生成 WebM，缓存 /tmp/uno-videos 30 分钟供下载；仅完整对局有回放
+// 回放视频：ffmpeg 纯代码生成 H.264 MP4，缓存 /tmp/uno-videos 30 分钟供下载；仅完整对局有回放
+// 签名直链：点一次生成后拿到带 HMAC 的 URL，30 分钟内换页面/设备也能直接下载
+import crypto from "node:crypto";
 const VIDEO_DIR = "/tmp/uno-videos";
 const VIDEO_TTL_MS = 30 * 60 * 1000;
+let videoSecret = null;
+function getVideoSecret() {
+  if (videoSecret) return videoSecret;
+  const keyFile = new URL("./data/video-secret.key", import.meta.url).pathname;
+  try { videoSecret = fs.readFileSync(keyFile, "utf8").trim(); } catch {
+    videoSecret = crypto.randomBytes(32).toString("hex");
+    fs.mkdirSync(new URL("./data/", import.meta.url).pathname, { recursive: true });
+    fs.writeFileSync(keyFile, videoSecret);
+  }
+  return videoSecret;
+}
+function signVideo(id, exp) {
+  return crypto.createHmac("sha256", getVideoSecret()).update(`${id}.${exp}`).digest("hex").slice(0, 32);
+}
 function sweepVideos() {
   try {
     for (const f of fs.readdirSync(VIDEO_DIR)) {
@@ -125,34 +141,66 @@ function sweepVideos() {
     }
   } catch {}
 }
-app.get("/api/replay/:id/video", async (req, res) => {
-  const user = authFromRequest(req);
-  if (!user) return res.status(401).json({ error: "请先登录" });
-  const id = Number(req.params.id) || 0;
-  if (path.basename(`${id}.webm`) !== `${id}.webm`) return res.status(400).json({ error: "bad id" });
-  const cached = path.join(VIDEO_DIR, `${id}.webm`);
+async function makeVideoIfStale(id, actions) {
+  fs.mkdirSync(VIDEO_DIR, { recursive: true });
+  const cached = path.join(VIDEO_DIR, `${id}.mp4`);
+  try {
+    const st = fs.statSync(cached);
+    if (Date.now() - st.mtimeMs <= VIDEO_TTL_MS) return;
+  } catch {}
+  const buf = await makeReplayVideo(actions);
+  fs.writeFileSync(cached, buf);
+  sweepVideos();
+}
+async function serveReplayVideo(req, res, id) {
+  const cached = path.join(VIDEO_DIR, `${id}.mp4`);
   try {
     const st = fs.statSync(cached);
     if (Date.now() - st.mtimeMs <= VIDEO_TTL_MS) {
-      res.setHeader("Content-Type", "video/webm");
-      res.setHeader("Content-Disposition", `attachment; filename="uno-replay-${id}.webm"`);
+      res.setHeader("Content-Type", "video/mp4");
+      res.setHeader("Content-Disposition", `attachment; filename="uno-replay-${id}.mp4"`);
       return res.sendFile(cached);
     }
   } catch {}
-  const r = replay(id, user.id);
-  if (!r.ok) return res.status(404).json(r);
+  const r = replay(id, req.videoUser);
+  if (!r.ok) return res.status(404).json({ error: "回放不存在" });
   try {
-    const buf = await makeReplayVideo(r.actions || []);
-    fs.mkdirSync(VIDEO_DIR, { recursive: true });
-    fs.writeFileSync(cached, buf);
-    sweepVideos();
-    res.setHeader("Content-Type", "video/webm");
-    res.setHeader("Content-Disposition", `attachment; filename="uno-replay-${id}.webm"`);
-    res.send(buf);
+    await makeVideoIfStale(id, r.actions || []);
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Disposition", `attachment; filename="uno-replay-${id}.mp4"`);
+    res.sendFile(cached);
   } catch (e) {
     console.error("replay video failed:", e);
     res.status(500).json({ error: "视频生成失败" });
   }
+}
+app.post("/api/replay/:id/video-link", async (req, res) => {
+  const user = authFromRequest(req);
+  if (!user) return res.status(401).json({ error: "请先登录" });
+  const id = Number(req.params.id) || 0;
+  const r = replay(id, user.id);
+  if (!r.ok) return res.status(404).json(r);
+  // 签名 GET 不再回源生成，先在本次调用中生成并缓存，保证拿到链接即可下载
+  try {
+    await makeVideoIfStale(id, r.actions || []);
+  } catch (e) {
+    console.error("replay video failed:", e);
+    return res.status(500).json({ error: "视频生成失败" });
+  }
+  const exp = Date.now() + VIDEO_TTL_MS;
+  res.json({ url: `/api/replay/${id}/video?t=${signVideo(id, exp)}&e=${exp}`, expiresInMs: VIDEO_TTL_MS });
+});
+app.get("/api/replay/:id/video", async (req, res) => {
+  const id = Number(req.params.id) || 0;
+  const { t, e } = req.query;
+  if (t && e && Date.now() <= Number(e) && signVideo(id, Number(e)) === t) {
+    req.videoUser = null; // 签名直链免登录（仅参与者能拿到链接）
+    return serveReplayVideo(req, res, id);
+  }
+  const user = authFromRequest(req);
+  if (!user) return res.status(401).json({ error: "请先登录" });
+  req.videoUser = user.id;
+  await serveReplayVideo(req, res, id);
 });
 app.patch("/api/profile", (req, res) => {
   const user = authFromRequest(req);

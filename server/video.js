@@ -1,14 +1,15 @@
-// 回放视频生成：SVG 画帧 -> sharp 栅格化为 WebP -> VP8 关键帧封装为 WebM
-// 纯代码生成，不依赖无头浏览器；sharp 为预编译二进制，懒加载避免抬高常驻内存
+// 回放视频生成：SVG 画帧 -> sharp 栅格化 PNG -> 管道喂 ffmpeg(libx264) 编码 H.264 MP4
+// 无头浏览器不参与；sharp/ffmpeg 均为预编译二进制，懒加载避免抬高常驻内存。
 let sharp = null;
 
-const W = 480, H = 720, FRAME_MS = 900;
-const CLUSTER_MAX_MS = 20000; // SimpleBlock 时码是 16 位相对值，超长需分段 Cluster
+import { spawn } from "node:child_process";
+import fs from "node:fs";
 
+const W = 480, H = 720, FRAME_MS = 900;
+const FONT = "Droid Sans Fallback, DejaVu Sans, sans-serif";
 const COLORS = { red: "#e64545", yellow: "#f2c14e", green: "#3aa76d", blue: "#4a7fe0", wild: "#7a5cd6" };
 const COLOR_CN = { red: "红色", yellow: "黄色", green: "绿色", blue: "蓝色" };
 const VALUE_CN = { skip: "跳过", reverse: "反转", draw2: "+2", wild: "万能", wild4: "+4" };
-const FONT = "Droid Sans Fallback, DejaVu Sans, sans-serif";
 
 function esc(s) { return String(s ?? "").replace(/&/g, "&").replace(/</g, "<").replace(/>/g, ">"); }
 
@@ -50,6 +51,7 @@ function simulate(actions) {
     // 快照：帧之间不得共享同一数组
     states.push({ top, active, last, players: players.map(pl => ({ ...pl })) });
   }
+  if (states.length) states.push({ ...states[states.length - 1], last: "对局结束" });
   return states;
 }
 
@@ -78,99 +80,39 @@ function frameSvg(st, idx, total) {
 </svg>`;
 }
 
-// —— 最小 WebM(EBML) 封装 ——
-const u32 = v => { const b = Buffer.alloc(4); b.writeUInt32BE(v); return b; };
-const u16 = v => { const b = Buffer.alloc(2); b.writeUInt16BE(v); return b; };
-
-// EBML 数据长度：n 字节大端，值 = v + 2^(7n)
-function ebmlLen(v) {
-  for (let n = 1; n <= 8; n++) {
-    if (v < (1 << (7 * n)) - 1 || n === 8) {
-      let x = BigInt(v) + (1n << BigInt(7 * n));
-      const b = Buffer.alloc(n);
-      for (let i = n - 1; i >= 0; i--) { b[i] = Number(x & 0xffn); x >>= 8n; }
-      return b;
-    }
-  }
-}
-function el(idHex, payload) {
-  const id = Buffer.from(idHex.replace(/\s/g, ""), "hex");
-  return Buffer.concat([id, ebmlLen(payload.length), payload]);
-}
-const uintEl = (id, v) => el(id, Buffer.from([v])); // 仅用于小值
-const strEl = (id, s) => el(id, Buffer.from(s, "utf8"));
-
-function ebmlHeader() {
-  return el("1A45DFA3", Buffer.concat([
-    uintEl("4286", 1), uintEl("42F7", 1), uintEl("42F2", 4), uintEl("42F3", 8),
-    strEl("4282", "webm"), uintEl("4287", 2), uintEl("4285", 2),
-  ]));
-}
-
-function mkInfo(durationMs) {
-  const dur = Buffer.alloc(4);
-  dur.writeFloatBE(durationMs);
-  return el("1549A966", Buffer.concat([
-    el("2AD7B1", u32(1000000)), // TimecodeScale 1ms
-    strEl("4D80", "uno-game"), strEl("5741", "uno-game"),
-    el("4489", dur), // Duration (float, ms)
-  ]));
-}
-
-function mkTracks() {
-  const video = el("E0", Buffer.concat([el("B0", u32(W)), el("BA", u32(H))]));
-  const track = el("AE", Buffer.concat([
-    el("D7", Buffer.from([0x01])),        // TrackNumber 1（普通 uint，非 vint）
-    uintEl("73C5", 1),                    // TrackUID
-    uintEl("83", 1),                      // TrackType video
-    uintEl("9C", 0),                      // FlagLacing
-    strEl("22B59C", "und"),               // Language
-    strEl("86", "V_VP8"),
-    strEl("258688", "VP8"),               // CodecName
-    video,
-  ]));
-  return el("1654AE6B", track);
-}
-
-// webp(lossy) 的 VP8 码流即关键帧：跳过 RIFF/WEBP/VP8 头 20 字节
-function webpToVp8(buf) {
-  if (buf.slice(12, 16).toString() !== "VP8 ") throw new Error("not lossy webp");
-  const frame = buf.subarray(20);
-  if (frame[3] !== 0x9d || frame[4] !== 0x01 || frame[5] !== 0x2a) throw new Error("bad VP8 magic");
-  return frame;
-}
-
-function simpleBlock(vp8, relMs) {
-  return el("A3", Buffer.concat([Buffer.from([0x81]), u16(relMs), Buffer.from([0x80]), vp8])); // track1 | relTime | keyframe
-}
-
+// PNG 帧管道 -> ffmpeg 编码 H.264 MP4（yuv420p + faststart，压缩率高、全端可播）
 export async function makeReplayVideo(actions) {
   if (!sharp) sharp = (await import("sharp")).default;
   const states = simulate(actions);
   if (!states.length) throw new Error("empty replay");
-  // 末尾补一帧终局停留
-  states.push({ ...states[states.length - 1], last: "对局结束" });
+  const { default: ffmpegPath } = await import("ffmpeg-static");
 
-  const frames = [];
-  for (let i = 0; i < states.length; i++) {
-    const webp = await sharp(Buffer.from(frameSvg(states[i], i, states.length)))
-      .webp({ quality: 68 }).toBuffer();
-    frames.push(webpToVp8(webp));
-  }
-
-  const totalMs = frames.length * FRAME_MS;
-  const clusters = [];
-  let cluster = [], clusterStart = 0;
-  for (let i = 0; i < frames.length; i++) {
-    const t = i * FRAME_MS;
-    if (cluster.length && t - clusterStart + FRAME_MS > CLUSTER_MAX_MS) {
-      clusters.push(el("1F43B675", Buffer.concat([el("E7", u32(clusterStart)), ...cluster])));
-      cluster = []; clusterStart = t;
-    }
-    cluster.push(simpleBlock(frames[i], t - clusterStart));
-  }
-  clusters.push(el("1F43B675", Buffer.concat([el("E7", u32(clusterStart)), ...cluster])));
-
-  const segment = Buffer.concat([mkInfo(totalMs), mkTracks(), ...clusters]);
-  return Buffer.concat([ebmlHeader(), el("18538067", segment)]);
+  return new Promise((resolve, reject) => {
+    // stdin 管道进帧；mp4 muxer 需要 seekable 输出，先写临时文件（同盘 tmpfs/磁盘，很快）
+    const tmpOut = `/tmp/uno-video-${process.pid}-${Date.now()}.mp4`;
+    const ff = spawn(ffmpegPath, [
+      "-hide_banner", "-loglevel", "error", "-y",
+      "-f", "image2pipe", "-framerate", String(1000 / FRAME_MS), "-i", "-",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+      "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+      tmpOut,
+    ]);
+    let err = "";
+    ff.stderr.on("data", c => { err += c; });
+    ff.on("error", reject);
+    ff.on("close", code => {
+      try {
+        if (code === 0) resolve(fs.readFileSync(tmpOut));
+        else reject(new Error(`ffmpeg failed: ${err.slice(0, 300)}`));
+      } finally { try { fs.unlinkSync(tmpOut); } catch {} }
+    });
+    (async () => {
+      for (let i = 0; i < states.length; i++) {
+        const png = await sharp(Buffer.from(frameSvg(states[i], i, states.length)))
+          .png({ compressionLevel: 6 }).toBuffer();
+        if (!ff.stdin.write(png)) await new Promise(r => ff.stdin.once("drain", r));
+      }
+      ff.stdin.end();
+    })().catch(e => { ff.kill(); reject(e); });
+  });
 }

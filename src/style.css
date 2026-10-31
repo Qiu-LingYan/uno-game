@@ -39,11 +39,11 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 .panel label{display:block;color:var(--muted);font-size:12px;margin-bottom:8px;font-weight:700}
 .panel input,.join input{width:100%;height:50px;border:1px solid var(--border);background:#171226;color:var(--text);border-radius:14px;padding:0 16px;outline:none;transition:border-color .15s,box-shadow .15s;font-size:16px}
 .panel input:focus,.join input:focus{border-color:var(--primary-2);box-shadow:0 0 0 3px #6647e033}
-.primary{width:100%;margin-top:16px;height:54px;border:0;border-radius:16px;background:linear-gradient(135deg,var(--primary),var(--primary-2));color:#fff;font-weight:800;font-size:16px;transition:transform .12s,box-shadow .12s}
+.primary{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:16px;height:54px;border:0;border-radius:16px;background:linear-gradient(135deg,var(--primary),var(--primary-2));color:#fff;font-weight:800;font-size:16px;transition:transform .12s,box-shadow .12s}
 .primary:not(:disabled):active{transform:scale(.97)}
 .primary:hover{box-shadow:var(--glow)}
 .primary:disabled{opacity:.4;cursor:not-allowed}
-.primary span{float:right;font-size:20px}
+.primary span{font-size:20px;line-height:1}
 .divider{display:flex;align-items:center;gap:12px;color:#7c6f9e;font-size:12px;margin:20px 0;font-weight:700}
 .divider:before,.divider:after{content:'';height:1px;background:var(--border);flex:1}
 .join{display:flex;gap:10px}
@@ -293,6 +293,6 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 /* 游客进房前填昵称弹窗 */
 .nickModal{min-width:300px;max-width:86vw;text-align:left}
 .nickModal p{margin:0 0 6px;font-size:20px;font-weight:900}
-.nickModal .nickInput{width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;border:1px solid #34363d;background:#111216;color:#f7f5f2;font-size:15px;margin:12px 0 16px;outline:none}
+.nickModal .nickInput{width:100%;box-sizing:border-box;padding:12px 14px;border-radius:12px;border:1px solid #34363d;background:#111216;color:#f7f5f2;font-size:16px;margin:12px 0 16px;outline:none}
 .nickModal .nickInput:focus{border-color:var(--primary)}
 .nickModal .nickActions{display:flex;gap:10px;justify-content:flex-end}

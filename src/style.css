@@ -142,9 +142,28 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 /* ---- 页面切换过渡 ---- */
 .welcome,.loginPage,.profilePage,.table{animation:viewIn .32s cubic-bezier(.22,.9,.3,1) both}
 @keyframes viewIn{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.welcome .panel,.loginPanel{animation:viewIn .4s cubic-bezier(.22,.9,.3,1) .06s both}
+/* 出牌落堆动画：弃牌堆顶牌换新时弹入 */
+.discardCard{animation:playPop .32s cubic-bezier(.34,1.4,.4,1) both}
+.discardCard .card{box-shadow:0 10px 26px #0009}
+@keyframes playPop{from{opacity:0;transform:scale(.6) rotate(-14deg) translateY(-26px)}to{opacity:1;transform:none}}
+/* 手牌入场：逐张发牌 */
+.cardButton{animation:dealIn .3s ease both}
+.cardButton:nth-child(1){animation-delay:.02s}.cardButton:nth-child(2){animation-delay:.05s}.cardButton:nth-child(3){animation-delay:.08s}.cardButton:nth-child(4){animation-delay:.11s}.cardButton:nth-child(5){animation-delay:.14s}.cardButton:nth-child(6){animation-delay:.17s}.cardButton:nth-child(7){animation-delay:.2s}.cardButton:nth-child(n+8){animation-delay:.23s}
+@keyframes dealIn{from{opacity:0;transform:translateY(22px) rotate(4deg)}to{opacity:1;transform:none}}
+.cardCount{transition:transform .15s}
+/* 结算浮层 */
+.resultOverlay{z-index:30}
+.resultModal{max-width:340px;width:92%;animation:popIn .34s cubic-bezier(.34,1.4,.4,1) both;text-align:center}
+@keyframes popIn{from{opacity:0;transform:scale(.82) translateY(16px)}to{opacity:1;transform:none}}
+.resultTitle{margin:6px 0 14px;font-size:22px;font-weight:900}
+.resultList{display:flex;flex-direction:column;gap:6px;margin-bottom:12px}
+.resultRow{display:flex;justify-content:space-between;align-items:center;background:var(--panel-2,#232433);border:1px solid var(--border);border-radius:10px;padding:8px 14px;font-size:14px;animation:dealIn .3s ease both}
+.resultRow.winRow{border-color:#f4c86a;color:#f4c86a;font-weight:800}
+.resultMeta{font-size:12px;color:var(--muted);margin-bottom:14px}
 .modalBackdrop{animation:fadeIn .16s ease both}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-@media (prefers-reduced-motion:reduce){.welcome,.loginPage,.profilePage,.table,.modalBackdrop{animation:none}}
+@media (prefers-reduced-motion:reduce){.welcome,.loginPage,.profilePage,.table,.modalBackdrop,.welcome .panel,.loginPanel,.discardCard,.cardButton,.resultModal,.resultRow{animation:none}}
 
 /* ---- 回合倒计时 / 机器人 / 排行榜 / 最近战绩 ---- */
 .turnTimer{margin-left:12px;font-weight:800;color:#7ee0a8}

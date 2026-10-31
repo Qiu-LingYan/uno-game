@@ -259,6 +259,27 @@ function bestPlayableIdx(state, pid) {
     ? (c.value === "wild4" || (c.value === "draw2" && top.value === "draw2"))
     : canPlay(c, top, state.activeColor));
 }
+// Bot 策略：对手牌少时优先打功能牌压制；平时优先同色数字牌，万能牌尽量留到最后
+function botPickIdx(state, pid) {
+  const hand = state.hands[pid] || [];
+  const top = state.discard[state.discard.length - 1];
+  const nextPid = state.players[(state.turn + 1) % state.players.length];
+  const nextCount = (state.hands[nextPid] || []).length;
+  let best = -1, bestScore = -1;
+  hand.forEach((c, i) => {
+    const ok = state.pendingDraw > 0
+      ? (c.value === "wild4" || (c.value === "draw2" && top.value === "draw2"))
+      : canPlay(c, top, state.activeColor);
+    if (!ok) return;
+    let s;
+    if (c.value === "wild4") s = nextCount <= 2 ? 9 : 1;
+    else if (c.color === "wild") s = 2;
+    else if (c.value === "skip" || c.value === "reverse" || c.value === "draw2") s = nextCount <= 2 ? 12 : 6;
+    else s = 4 + (c.color === state.activeColor ? 1 : 0);
+    if (s > bestScore) { bestScore = s; best = i; }
+  });
+  return best;
+}
 function chosenColorFor(state, pid) {
   const counts = { red: 0, yellow: 0, green: 0, blue: 0 };
   for (const c of state.hands[pid] || []) if (c.color in counts) counts[c.color]++;
@@ -274,7 +295,7 @@ function autoAct(room, code, { silent = false } = {}) {
   const seat = room.players.find(p => p.id === pid);
   const name = seat?.name || "玩家";
   let moved = "";
-  let idx = bestPlayableIdx(state, pid);
+  let idx = silent ? botPickIdx(state, pid) : bestPlayableIdx(state, pid);
   if (idx !== -1) {
     const card = state.hands[pid][idx];
     const r = playCard(state, pid, idx, card.color === "wild" ? chosenColorFor(state, pid) : undefined);
@@ -306,7 +327,10 @@ function afterAction(room, code) {
   if (room.state?.winner) {
     room.turnDeadline = null;
     saveFinishedGame(room, code);
-    // 保留牌桌结算画面，由房主点「再来一局」开启下一轮
+    // 结算画面即转正旁观者：不用等下一局才开始，下局直接入座
+    while (room.spectators?.length && room.players.length < MAX_PLAYERS) {
+      room.players.push({ ...room.spectators.shift(), disconnectedAt: null });
+    }
     broadcast(room, code);
     return;
   }
@@ -355,7 +379,8 @@ function broadcast(room, code) {
   const botIds = room.players.filter(p => p.bot).map(p => p.id);
   const kicks = (room.kickTargets || []).map(k => ({ playerId: k.playerId, until: k.until }));
   const turnEndsAt = room.started && room.state && !room.state.winner ? room.turnDeadline || null : null;
-  const base = { room: code, players: room.players.map(x => x.name), roster, spectatorNames, offlineIds, kicks, botIds, botNames: room.players.filter(p => p.bot).map(p => p.name), turnEndsAt, started: room.started, names };
+  const roundSeconds = room.started && room.state?.winner && room.startedAt ? Math.max(1, Math.round((Date.now() - room.startedAt) / 1000)) : null;
+  const base = { room: code, players: room.players.map(x => x.name), roster, spectatorNames, offlineIds, kicks, botIds, botNames: room.players.filter(p => p.bot).map(p => p.name), turnEndsAt, started: room.started, names, roundSeconds, unoCatches: room.started ? (room.unoCatches || 0) : 0 };
   for (const p of room.players) {
     const state = room.started ? publicState(room.state, p.id) : { handCounts: {}, turn: null };
     io.to(p.id).emit("state", { ...base, spectating: false, ...state });
@@ -581,6 +606,7 @@ io.on("connection", (socket) => {
     room.started = true;
     room.startedAt = Date.now();
     room.saved = false;
+    room.unoCatches = 0;
     // 开局即固定 userId 映射：对局中登出/断线导致 socketUsers 清理后，结算仍能记到战绩
     room.seatUsers = Object.fromEntries(room.players.map(p => [p.id, p.userId || null]));
     room.state = newGame(room.players.map(p => p.id));
@@ -634,6 +660,7 @@ io.on("connection", (socket) => {
     const result = callUno(room.state, socket.id);
     if (!result.ok) return cb?.(result);
     touch(room);
+    room.unoCatches = (room.unoCatches || 0) + 1;
     broadcast(room, code);
     // 全房间突脸：UNO！
     const pname = room.players.find(p => p.id === socket.id)?.name || "有人";

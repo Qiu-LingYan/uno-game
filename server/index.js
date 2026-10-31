@@ -11,8 +11,26 @@ const server = http.createServer(app);
 // CORS 白名单：站点自身 + 本地开发，禁止任意来源建立 WS 连接
 const ALLOWED_ORIGINS = [process.env.APP_URL || "https://uno.qiulingyan.top", "https://chat.qiulingyan.top", "http://localhost:5173", "http://127.0.0.1:5173"];
 const io = new Server(server, { cors: { origin: ALLOWED_ORIGINS, methods: ["GET", "POST"] } });
+app.set("trust proxy", true); // 经 openresty 反代，取 X-Forwarded-For 作为限速 IP
 app.use(express.json({ limit: "16kb" }));
+// hash 文件名内容不可变 → 30 天强缓存；index.html 保持无缓存，保证发版后引用立即生效
+app.use("/assets", express.static(new URL("../dist/assets", import.meta.url).pathname, { maxAge: "30d", immutable: true }));
 app.use(express.static(new URL("../dist", import.meta.url).pathname));
+
+// 注册邮件限速：同邮箱 15 分钟最多 3 次、同 IP 1 小时最多 20 次，防止刷接口烧 Resend 配额
+const registerAttempts = new Map();
+function registerRateLimited(email, ip) {
+  const now = Date.now();
+  const hit = (key, limit, windowMs) => {
+    const rec = registerAttempts.get(key);
+    if (!rec || now - rec.first > windowMs) { registerAttempts.set(key, { first: now, count: 1 }); return false; }
+    rec.count += 1;
+    return rec.count > limit;
+  };
+  const limited = hit(`e:${email}`, 3, 15 * 60 * 1000) | hit(`i:${ip}`, 20, 60 * 60 * 1000);
+  if (registerAttempts.size > 5000) registerAttempts.clear();
+  return Boolean(limited);
+}
 
 const socketUsers = new Map();
 const authFromRequest = req => getUser((req.headers.authorization || "").replace(/^Bearer\s+/i, ""));
@@ -38,6 +56,8 @@ async function sendVerificationEmail(email, code) {
   }
 }
 app.post("/api/register", async (req, res) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  if (registerRateLimited(email, req.ip)) return res.status(429).json({ ok: false, error: "请求太频繁，请稍后再试" });
   const result = prepareRegistration(req.body?.email, req.body?.password, req.body?.username);
   if (!result.ok) return res.status(400).json(result);
   try {

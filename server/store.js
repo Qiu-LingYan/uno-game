@@ -48,6 +48,42 @@ if (!userColumns.has('username')) {
 const pendingColumns = new Set(db.prepare('PRAGMA table_info(pending_registrations)').all().map(column => column.name));
 if (!pendingColumns.has('username')) db.exec("ALTER TABLE pending_registrations ADD COLUMN username TEXT NOT NULL DEFAULT 'player'");
 
+// 高频 SQL 全部模块级预编译，避免每次调用重复 prepare
+const q = {
+  emailExists: db.prepare('SELECT 1 FROM users WHERE email=? COLLATE NOCASE'),
+  usernameExists: db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE'),
+  pendingUsernameTaken: db.prepare('SELECT 1 FROM pending_registrations WHERE username=? COLLATE NOCASE AND email<>? COLLATE NOCASE'),
+  purgeExpiredPending: db.prepare('DELETE FROM pending_registrations WHERE expires_at < ?'),
+  upsertPending: db.prepare(`INSERT INTO pending_registrations(email,username,password_hash,password_salt,code_hash,expires_at,attempts)
+    VALUES(?,?,?,?,?,?,0) ON CONFLICT(email) DO UPDATE SET username=excluded.username,password_hash=excluded.password_hash,
+    password_salt=excluded.password_salt,code_hash=excluded.code_hash,expires_at=excluded.expires_at,attempts=0`),
+  getPending: db.prepare('SELECT * FROM pending_registrations WHERE email=? COLLATE NOCASE'),
+  deletePending: db.prepare('DELETE FROM pending_registrations WHERE email=?'),
+  bumpPendingAttempts: db.prepare('UPDATE pending_registrations SET attempts=attempts+1 WHERE email=?'),
+  insertUser: db.prepare('INSERT INTO users(email,username,nickname,password_hash,password_salt) VALUES(?,?,?,?,?)'),
+  insertSession: db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)'),
+  purgeExpiredSessions: db.prepare('DELETE FROM sessions WHERE expires_at < ?'),
+  userByEmail: db.prepare('SELECT id,email,username,nickname,password_hash,password_salt FROM users WHERE email = ? COLLATE NOCASE'),
+  updatePasswordHash: db.prepare('UPDATE users SET password_hash=? WHERE id=?'),
+  userBySession: db.prepare('SELECT u.id,u.email,u.username,u.nickname FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?'),
+  deleteSession: db.prepare('DELETE FROM sessions WHERE token_hash=?'),
+  updateNickname: db.prepare('UPDATE users SET nickname=? WHERE id=?'),
+  profile: db.prepare(`SELECT u.email,u.username,u.nickname,u.created_at AS memberSince, COUNT(gp.game_id) AS gamesPlayed,
+    COALESCE(SUM(gp.won),0) AS wins,
+    CASE WHEN COUNT(gp.game_id)=0 THEN 0 ELSE ROUND(100.0*SUM(gp.won)/COUNT(gp.game_id),1) END AS winRate,
+    COALESCE(SUM(g.duration_seconds),0) AS playSeconds
+    FROM users u LEFT JOIN game_players gp ON gp.user_id=u.id
+    LEFT JOIN games g ON g.id=gp.game_id WHERE u.id=? GROUP BY u.id`),
+  publicProfile: db.prepare(`SELECT u.username,u.nickname,u.created_at AS memberSince, COUNT(gp.game_id) AS gamesPlayed,
+    COALESCE(SUM(gp.won),0) AS wins,
+    CASE WHEN COUNT(gp.game_id)=0 THEN 0 ELSE ROUND(100.0*SUM(gp.won)/COUNT(gp.game_id),1) END AS winRate,
+    COALESCE(SUM(g.duration_seconds),0) AS playSeconds
+    FROM users u LEFT JOIN game_players gp ON gp.user_id=u.id
+    LEFT JOIN games g ON g.id=gp.game_id WHERE u.username=? COLLATE NOCASE GROUP BY u.id`),
+  insertGame: db.prepare('INSERT INTO games(room_code,started_at,ended_at,duration_seconds) VALUES(?,?,?,?)'),
+  insertGamePlayer: db.prepare('INSERT OR IGNORE INTO game_players(game_id,user_id,won) VALUES(?,?,?)'),
+};
+
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const tokenHash = token => createHash('sha256').update(token).digest('hex');
 // 登录失败速率限制：同一邮箱 15 分钟内最多 10 次失败，防止暴力破解
@@ -71,45 +107,43 @@ export function prepareRegistration(email, password, username) {
   const normalizedEmail = email.trim().toLowerCase();
   const normalizedUsername = String(username || '').trim().toLowerCase();
   if (!/^[a-z0-9_]{3,20}$/.test(normalizedUsername)) return { ok: false, error: '用户名需为 3–20 位字母、数字或下划线' };
-  if (db.prepare('SELECT 1 FROM users WHERE email=? COLLATE NOCASE').get(normalizedEmail)) return { ok: false, error: '该邮箱已注册' };
-  if (db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').get(normalizedUsername)) return { ok: false, error: '该用户名已被占用' };
-  if (db.prepare('SELECT 1 FROM pending_registrations WHERE username=? COLLATE NOCASE AND email<>? COLLATE NOCASE').get(normalizedUsername, normalizedEmail)) return { ok: false, error: '该用户名暂不可用' };
-  db.prepare('DELETE FROM pending_registrations WHERE expires_at < ?').run(Date.now());
+  if (q.emailExists.get(normalizedEmail)) return { ok: false, error: '该邮箱已注册' };
+  if (q.usernameExists.get(normalizedUsername)) return { ok: false, error: '该用户名已被占用' };
+  if (q.pendingUsernameTaken.get(normalizedUsername, normalizedEmail)) return { ok: false, error: '该用户名暂不可用' };
+  q.purgeExpiredPending.run(Date.now());
   const salt = randomBytes(16).toString('hex');
   const code = String(randomBytes(4).readUInt32BE() % 1000000).padStart(6, '0');
-  db.prepare(`INSERT INTO pending_registrations(email,username,password_hash,password_salt,code_hash,expires_at,attempts)
-    VALUES(?,?,?,?,?,?,0) ON CONFLICT(email) DO UPDATE SET username=excluded.username,password_hash=excluded.password_hash,
-    password_salt=excluded.password_salt,code_hash=excluded.code_hash,expires_at=excluded.expires_at,attempts=0`)
+  q.upsertPending
     .run(normalizedEmail, normalizedUsername, passwordHash(password, salt), salt, tokenHash(code), Date.now() + 10 * 60 * 1000);
   return { ok: true, email: normalizedEmail, username: normalizedUsername, code };
 }
 
 export function confirmRegistration(email, code) {
   const normalizedEmail = String(email || '').trim().toLowerCase();
-  const pending = db.prepare('SELECT * FROM pending_registrations WHERE email=? COLLATE NOCASE').get(normalizedEmail);
+  const pending = q.getPending.get(normalizedEmail);
   if (!pending || pending.expires_at < Date.now()) {
-    db.prepare('DELETE FROM pending_registrations WHERE email=? COLLATE NOCASE').run(normalizedEmail);
+    q.deletePending.run(normalizedEmail);
     return { ok: false, error: '验证码无效或已过期，请重新发送' };
   }
   if (pending.attempts >= 5) return { ok: false, error: '验证码尝试次数过多，请重新发送' };
   const candidateHash = tokenHash(String(code || ''));
   const valid = /^[0-9]{6}$/.test(String(code || '')) && timingSafeEqual(Buffer.from(candidateHash), Buffer.from(pending.code_hash));
   if (!valid) {
-    db.prepare('UPDATE pending_registrations SET attempts=attempts+1 WHERE email=?').run(normalizedEmail);
+    q.bumpPendingAttempts.run(normalizedEmail);
     return { ok: false, error: '验证码错误' };
   }
   const token = randomBytes(32).toString('base64url');
   // 用户名可能在等待验证期间被他人注册：给出友好错误并作废该 pending（需重新注册）
-  if (db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').get(pending.username)) {
-    db.prepare('DELETE FROM pending_registrations WHERE email=?').run(normalizedEmail);
+  if (q.usernameExists.get(pending.username)) {
+    q.deletePending.run(normalizedEmail);
     return { ok: false, error: '该用户名已被占用，请重新注册并换一个用户名' };
   }
   db.exec('BEGIN IMMEDIATE');
   try {
-    const result = db.prepare('INSERT INTO users(email,username,nickname,password_hash,password_salt) VALUES(?,?,?,?,?)').run(normalizedEmail, pending.username, pending.username, pending.password_hash, pending.password_salt);
+    const result = q.insertUser.run(normalizedEmail, pending.username, pending.username, pending.password_hash, pending.password_salt);
     const userId = Number(result.lastInsertRowid);
-    db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(tokenHash(token), userId, Date.now() + 30 * 24 * 60 * 60 * 1000);
-    db.prepare('DELETE FROM pending_registrations WHERE email=?').run(normalizedEmail);
+    q.insertSession.run(tokenHash(token), userId, Date.now() + 30 * 24 * 60 * 60 * 1000);
+    q.deletePending.run(normalizedEmail);
     db.exec('COMMIT');
     return { ok: true, token, user: { id: userId, email: normalizedEmail, username: pending.username, nickname: pending.username } };
   } catch (error) {
@@ -125,7 +159,7 @@ export function login(email, password) {
   if (rec && rec.count >= LOGIN_MAX_FAILURES && now - rec.first < LOGIN_WINDOW_MS) {
     return { ok: false, error: '尝试次数过多，请 15 分钟后再试' };
   }
-  const user = db.prepare('SELECT id,email,username,nickname,password_hash,password_salt FROM users WHERE email = ? COLLATE NOCASE').get(String(email || '').trim());
+  const user = q.userByEmail.get(String(email || '').trim());
   if (!user) { recordLoginFailure(key); return { ok: false, error: '邮箱或密码错误' }; }
   const candidate = String(password || '');
   const stored = Buffer.from(user.password_hash, 'hex');
@@ -142,60 +176,47 @@ export function login(email, password) {
   }
   const token = randomBytes(32).toString('base64url');
   loginAttempts.delete(key);
-  db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
-  if (upgraded) db.prepare('UPDATE users SET password_hash=? WHERE id=?').run(upgraded, user.id);
-  db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(tokenHash(token), user.id, Date.now() + 30 * 24 * 60 * 60 * 1000);
+  q.purgeExpiredSessions.run(Date.now());
+  if (upgraded) q.updatePasswordHash.run(upgraded, user.id);
+  q.insertSession.run(tokenHash(token), user.id, Date.now() + 30 * 24 * 60 * 60 * 1000);
   return { ok: true, token, user: { id: user.id, email: user.email, username: user.username, nickname: user.nickname } };
 }
 
 export function getUser(token) {
   if (!token) return null;
-  return db.prepare('SELECT u.id,u.email,u.username,u.nickname FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>?').get(tokenHash(token), Date.now()) || null;
+  return q.userBySession.get(tokenHash(token), Date.now()) || null;
 }
 
 export function logout(token) {
-  if (token) db.prepare('DELETE FROM sessions WHERE token_hash=?').run(tokenHash(token));
+  if (token) q.deleteSession.run(tokenHash(token));
 }
 
 export function updateNickname(userId, nickname) {
   const value = String(nickname || '').trim();
   if (value.length < 2 || value.length > 20) return { ok: false, error: '昵称需为 2–20 个字符' };
-  db.prepare('UPDATE users SET nickname=? WHERE id=?').run(value, userId);
+  q.updateNickname.run(value, userId);
   return { ok: true, nickname: value };
 }
 
 export function profile(userId) {
-  return db.prepare(`SELECT u.email,u.username,u.nickname,u.created_at AS memberSince, COUNT(gp.game_id) AS gamesPlayed,
-    COALESCE(SUM(gp.won),0) AS wins,
-    CASE WHEN COUNT(gp.game_id)=0 THEN 0 ELSE ROUND(100.0*SUM(gp.won)/COUNT(gp.game_id),1) END AS winRate,
-    COALESCE(SUM(g.duration_seconds),0) AS playSeconds
-    FROM users u LEFT JOIN game_players gp ON gp.user_id=u.id
-    LEFT JOIN games g ON g.id=gp.game_id WHERE u.id=? GROUP BY u.id`).get(userId);
+  return q.profile.get(userId);
 }
 
 // 公开战绩（不含 email）：用于游戏中点击对手头像查看资料
 export function publicProfile(username) {
   const name = String(username || '').trim().toLowerCase();
   if (!/^[a-z0-9_]{3,20}$/.test(name)) return null;
-  const row = db.prepare(`SELECT u.username,u.nickname,u.created_at AS memberSince, COUNT(gp.game_id) AS gamesPlayed,
-    COALESCE(SUM(gp.won),0) AS wins,
-    CASE WHEN COUNT(gp.game_id)=0 THEN 0 ELSE ROUND(100.0*SUM(gp.won)/COUNT(gp.game_id),1) END AS winRate,
-    COALESCE(SUM(g.duration_seconds),0) AS playSeconds
-    FROM users u LEFT JOIN game_players gp ON gp.user_id=u.id
-    LEFT JOIN games g ON g.id=gp.game_id WHERE u.username=? COLLATE NOCASE GROUP BY u.id`).get(name);
-  return row || null;
+  return q.publicProfile.get(name) || null;
 }
 
 export function recordGame(roomCode, startedAt, endedAt, playerIds, winnerId, userIdBySocket) {
   const duration = Math.max(0, Math.floor((endedAt - startedAt) / 1000));
-  const insertGame = db.prepare('INSERT INTO games(room_code,started_at,ended_at,duration_seconds) VALUES(?,?,?,?)');
-  const insertPlayer = db.prepare('INSERT OR IGNORE INTO game_players(game_id,user_id,won) VALUES(?,?,?)');
   db.exec('BEGIN IMMEDIATE');
   try {
-    const gameId = Number(insertGame.run(roomCode, startedAt, endedAt, duration).lastInsertRowid);
+    const gameId = Number(q.insertGame.run(roomCode, startedAt, endedAt, duration).lastInsertRowid);
     for (const socketId of playerIds) {
       const userId = userIdBySocket(socketId);
-      if (userId) insertPlayer.run(gameId, userId, socketId === winnerId ? 1 : 0);
+      if (userId) q.insertGamePlayer.run(gameId, userId, socketId === winnerId ? 1 : 0);
     }
     db.exec('COMMIT');
   } catch (error) {

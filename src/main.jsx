@@ -8,7 +8,7 @@ const uidFromUrl = new URLSearchParams(location.search).get('u');
 // 游客身份可显式写在 URL（?u=）：换浏览器/分享恢复状态；登录用户由账号恢复，忽略 URL 里的 u
 const clientId = uidFromUrl && uidPattern.test(uidFromUrl) ? uidFromUrl : (localStorage.getItem('uno-client-id') || crypto.randomUUID());
 localStorage.setItem('uno-client-id', clientId);
-const socket = io(import.meta.env.VITE_SOCKET_URL || undefined, { autoConnect: false, path: '/socket.io', auth: callback => callback({ token: localStorage.getItem('uno-token'), clientId }) });
+const socket = io(import.meta.env.VITE_SOCKET_URL || undefined, { autoConnect: false, path: '/socket.io', transports: ['websocket'], auth: callback => callback({ token: localStorage.getItem('uno-token'), clientId }) });
 const storedName = localStorage.getItem('uno-name') || '';
 const labels = { skip: '🚫', reverse: '🔄', draw2: '+2', wild: '变色', wild4: '+4' };
 const colors = { red: '#ff5062', yellow: '#ffd843', green: '#48d597', blue: '#4c9aff', wild: '#252936' };

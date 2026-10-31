@@ -29,7 +29,7 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 .profileLink{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:44vw}
 .backLink{padding:0;margin-bottom:28px}
 /* ---- 欢迎页 ---- */
-.welcome{max-width:960px;margin:72px auto 0;display:grid;grid-template-columns:1.1fr .9fr;gap:64px;align-items:center}
+.welcome{max-width:1080px;margin:72px auto 0;display:grid;grid-template-columns:1.1fr .9fr;gap:56px;align-items:center}
 .orbit{font-size:24px;letter-spacing:12px;margin-bottom:22px}
 .eyebrow{color:var(--muted);letter-spacing:.2em;font-size:11px;font-weight:700}
 .hero h1{font-size:clamp(42px,6vw,66px);line-height:1.05;letter-spacing:-.02em;margin:20px 0;font-weight:900}
@@ -230,7 +230,7 @@ header{min-height:56px;display:flex;align-items:center;justify-content:space-bet
 .authHint{font-size:12px;color:var(--muted);line-height:1.6;margin:6px 0 12px}
 /* ---- 移动端 ---- */
 @media(max-width:700px){
-  .shell{padding:14px 12px 20px}
+  .shell{padding:14px 8px 20px}
   .brand small{display:none}
   .logo{width:36px;height:36px;font-size:19px;border-radius:12px}
   .headerRight{gap:8px}

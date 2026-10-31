@@ -134,6 +134,28 @@ test('catchUno within window penalizes 2 cards; expired window rejects', () => {
   assert.equal(state2.hands.a.length, 1);
 });
 
+test('drawCards rejects a second draw while mayPlayDrawn is pending', () => {
+  const state = makeState({ hands: { a: [], b: [] }, drawPile: [{ color:'blue', value:'6' }, { color:'red', value:'5' }] });
+  // 顶部是 red 5（makeState 默认），摸到 red 5 可出 → 保留回合
+  const r = drawCards(state, 'a');
+  assert.equal(r.mayPlay, true);
+  const r2 = drawCards(state, 'a');
+  assert.equal(r2.ok, false);
+  assert.equal(state.hands.a.length, 1); // 没有多摸
+});
+
+test('stale unoVulnerable is voided when target draws back above 1 card', () => {
+  const state = makeState({ hands: { a: [{ color:'red', value:'3' }, { color:'blue', value:'9' }], b: [] }, drawPile: [{ color:'red', value:'7' }] });
+  playCard(state, 'a', 0); // a 剩 1 张，进入暴露窗口
+  assert.equal(state.unoVulnerable.player, 'a');
+  // a 的回合还没到；但即使窗口未到期，目标手牌不再是 1 张时抓 UNO 必须无效
+  state.hands.a.push({ color:'green', value:'2' }); // 模拟窗口内又摸了牌
+  const r = catchUno(state, 'b', Date.now());
+  assert.equal(r.ok, false);
+  assert.equal(state.unoVulnerable, null);
+  assert.equal(state.hands.a.length, 2);
+});
+
 test('callUno clears the vulnerable window', () => {
   const state = makeState({ hands: { a: [{ color:'red', value:'3' }, { color:'blue', value:'9' }], b: [] } });
   playCard(state, 'a', 0);

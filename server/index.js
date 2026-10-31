@@ -295,7 +295,9 @@ function autoAct(room, code, { silent = false } = {}) {
   const seat = room.players.find(p => p.id === pid);
   const name = seat?.name || "玩家";
   let moved = "";
-  let idx = silent ? botPickIdx(state, pid) : bestPlayableIdx(state, pid);
+  // 保留回合状态（刚摸的牌可出）：只能打刚摸那张，跳过常规选牌
+  let idx = state.mayPlayDrawn != null ? state.mayPlayDrawn
+    : silent ? botPickIdx(state, pid) : bestPlayableIdx(state, pid);
   if (idx !== -1) {
     const card = state.hands[pid][idx];
     const r = playCard(state, pid, idx, card.color === "wild" ? chosenColorFor(state, pid) : undefined);

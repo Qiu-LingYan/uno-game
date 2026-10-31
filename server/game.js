@@ -124,6 +124,8 @@ export function catchUno(state, catcherId, now = Date.now()) {
   if (!v) return { ok: false, error: "no uno to catch" };
   if (v.player === catcherId) return { ok: false, error: "cannot catch yourself" };
   if (now > v.deadline) { state.unoVulnerable = null; return { ok: false, error: "too late" }; }
+  // 窗口内目标又摸了牌（手牌 > 1）说明已脱离"只剩一张"状态，窗口作废
+  if (state.hands[v.player].length !== 1) { state.unoVulnerable = null; return { ok: false, error: "no uno to catch" }; }
   const hand = state.hands[v.player];
   for (let i = 0; i < 2; i++) {
     if (state.drawPile.length === 0) reshuffle(state);
@@ -149,6 +151,8 @@ export function drawCards(state, playerId) {
   if (state.winner) return { ok: false, error: "game over" };
   const pid = state.players[state.turn];
   if (pid !== playerId) return { ok: false, error: "not your turn" };
+  // 摸到的牌还没决定出/留时不允许再摸（防客户端连点/超时路径二次摸牌）
+  if (state.mayPlayDrawn != null) return { ok: false, error: "请先决定刚摸到的牌" };
   const count = state.pendingDraw > 0 ? state.pendingDraw : 1;
   const forced = state.pendingDraw > 0;
   state.pendingDraw = 0;
@@ -159,6 +163,8 @@ export function drawCards(state, playerId) {
     hand.push(state.drawPile.pop());
   }
   // 主动摸 1 张且摸到的牌可出：保留回合，玩家可选择打出或留着
+  // 手牌回到 1 张以上：提前作废自己的抓 UNO 窗口（不必等 15s 到期）
+  if (state.unoVulnerable?.player === playerId && hand.length > 1) state.unoVulnerable = null;
   const top = state.discard[state.discard.length - 1];
   if (!forced && count === 1 && canPlay(hand[hand.length - 1], top, state.activeColor)) {
     state.mayPlayDrawn = hand.length - 1;

@@ -1,14 +1,21 @@
 <div align="center">
 
-# UNO Party — 在线派对 UNO
+# UNO Party
 
-**把友情放进弃牌堆。** 一个为多人在线派对而生的 UNO 游戏服务。
+**把友情放进弃牌堆。**
 
+一个为多人在线派对而生的 UNO 游戏服务 —— 纯函数规则引擎、毫秒级实时对战、断线无缝恢复座位。
+
+[![License](https://img.shields.io/badge/License-MIT-6647e0)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-22+-339933?logo=node.js&logoColor=white)](https://nodejs.org)
-[![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev)
 [![Socket.IO](https://img.shields.io/badge/Socket.IO-4-white?logo=socket.io)](https://socket.io)
-[![SQLite](https://img.shields.io/badge/SQLite-零运维-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
-[![Tests](https://img.shields.io/badge/tests-24%20passing-3DDC84)](#测试)
+[![Tests](https://img.shields.io/badge/Tests-24%20passing-3DDC84)](#-测试)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4)](https://github.com/Qiu-LingYan/uno-game/pulls)
+
+<br>
+
+[在线试玩](https://chat.qiulingyan.top) · [快速开始](#-快速开始) · [架构](#-架构) · [部署](#-生产部署) · [报告问题](https://github.com/Qiu-LingYan/uno-game/issues)
 
 </div>
 
@@ -30,19 +37,42 @@ UNO Party 是一个完整的在线 UNO 对战平台：纯函数规则引擎保�
 
 ## 架构
 
-```
-React 19 SPA (Vite)  ── Socket.IO / REST ──►  Node.js 服务端
-                                              · Socket.IO 房间生命周期
-                                              · 纯函数规则引擎
-                                              · Resend 邮件验证
-                                                        │
-                                                   SQLite（账号 / 会话 / 战绩）
+```mermaid
+flowchart LR
+    subgraph client["客户端"]
+        SPA["React 19 SPA<br/>Vite · richup.io 风格<br/>单文件 main.jsx"]
+    end
+
+    subgraph server["Node.js 服务端（单进程）"]
+        IO["Socket.IO 4<br/>房间广播 · 座位恢复<br/>votekick · 房间 TTL 清扫"]
+        ENGINE["纯函数规则引擎<br/>不碰 IO · 不碰时钟"]
+        MAIL["Resend 邮件<br/>验证码注册"]
+    end
+
+    DB[("SQLite<br/>账号 · 会话 · 战绩")]
+
+    SPA -- "Socket.IO / REST" --> IO
+    IO --> ENGINE
+    IO --> MAIL
+    IO --> DB
+
+    style client fill:#1a1526,stroke:#6647e0,color:#e6e0ff
+    style server fill:#1a1526,stroke:#6647e0,color:#e6e0ff
+    style SPA fill:#241c3a,stroke:#6647e0
+    style IO fill:#241c3a,stroke:#6647e0
+    style ENGINE fill:#241c3a,stroke:#6647e0
+    style MAIL fill:#241c3a,stroke:#6647e0
+    style DB fill:#241c3a,stroke:#00b8a9
 ```
 
-- **`server/game.js`** — 纯函数 UNO 规则引擎：不碰 IO、不碰时钟（时间由外部注入），可独立单测
-- **`server/index.js`** — Socket.IO 房间生命周期：座位恢复、旁观席转正、votekick 计时、房间 TTL 清扫
-- **`server/store.js`** — SQLite 持久层：账号、会话 token、对局战绩
-- **`src/main.jsx`** — 单文件 React 前端：错误 toast、UNO 突脸、变色 modal、旁观/踢人 UI
+**模块职责**
+
+| 模块 | 职责 |
+|---|---|
+| `server/game.js` | 纯函数 UNO 规则引擎：不碰 IO、不碰时钟（时间由外部注入），可独立单测 |
+| `server/index.js` | Socket.IO 房间生命周期：座位恢复、旁观席转正、votekick 计时、房间 TTL 清扫 |
+| `server/store.js` | SQLite 持久层：账号、会话 token、对局战绩 |
+| `src/main.jsx` | 单文件 React 前端：错误 toast、UNO 突脸、变色 modal、旁观/踢人 UI |
 
 ## 快速开始
 
@@ -56,10 +86,9 @@ npm run dev      # Vite 开发服务器（/socket.io/ 自动代理）
 
 打开浏览器，输入昵称，创建房间，把链接甩给朋友即可开局。
 
-### 启用邮箱注册
-
 <details>
-<summary><b>配置 Resend 邮件服务</b> · 可选，不配置则无法注册账号</summary>
+<summary><b>启用邮箱注册</b> · 可选，不配置则无法注册账号</summary>
+<br>
 
 在被 git 忽略的 `.env.local` 中配置 [Resend](https://resend.com)：
 
@@ -89,6 +118,14 @@ npm run smoke   # 双客户端加入同一房间并同步出牌、摸牌动作
 4. 健康检查：`curl http://127.0.0.1:3001/healthz`
 5. 备份：SQLite 文件位于 `data/uno.sqlite`（连同 WAL/SHM）
 
+## 贡献
+
+欢迎 Issue 与 PR。提交前请确保：
+
+```sh
+npm test    # 24 项测试全部通过
+```
+
 ## License
 
-MIT
+[MIT](LICENSE)

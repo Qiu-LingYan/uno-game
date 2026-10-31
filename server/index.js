@@ -3,6 +3,9 @@ import http from "http";
 import { Server } from "socket.io";
 import { newGame, playCard, drawCards, callUno, catchUno, keepDrawn, removePlayerFromState, rebindPlayerId, publicState, canPlay, COLORS } from "./game.js";
 import { prepareRegistration, confirmRegistration, login, getUser, logout, profile, updateNickname, recordGame, publicProfile, leaderboard, recentGames, replay } from "./store.js";
+import { makeReplayVideo } from "./video.js";
+import fs from "node:fs";
+import path from "node:path";
 
 const PORT = process.env.PORT || 3001;
 const MAX_PLAYERS = 7;   // 单房间座位上限（旁观席另限 8）
@@ -109,6 +112,47 @@ app.get("/api/replay/:id", (req, res) => {
   const r = replay(req.params.id, user.id);
   if (!r.ok) return res.status(404).json(r);
   res.json(r);
+});
+
+// 回放视频：纯代码生成 WebM，缓存 /tmp/uno-videos 30 分钟供下载；仅完整对局有回放
+const VIDEO_DIR = "/tmp/uno-videos";
+const VIDEO_TTL_MS = 30 * 60 * 1000;
+function sweepVideos() {
+  try {
+    for (const f of fs.readdirSync(VIDEO_DIR)) {
+      const p = path.join(VIDEO_DIR, f);
+      try { if (Date.now() - fs.statSync(p).mtimeMs > VIDEO_TTL_MS) fs.unlinkSync(p); } catch {}
+    }
+  } catch {}
+}
+app.get("/api/replay/:id/video", async (req, res) => {
+  const user = authFromRequest(req);
+  if (!user) return res.status(401).json({ error: "请先登录" });
+  const id = Number(req.params.id) || 0;
+  if (path.basename(`${id}.webm`) !== `${id}.webm`) return res.status(400).json({ error: "bad id" });
+  const cached = path.join(VIDEO_DIR, `${id}.webm`);
+  try {
+    const st = fs.statSync(cached);
+    if (Date.now() - st.mtimeMs <= VIDEO_TTL_MS) {
+      res.setHeader("Content-Type", "video/webm");
+      res.setHeader("Content-Disposition", `attachment; filename="uno-replay-${id}.webm"`);
+      return res.sendFile(cached);
+    }
+  } catch {}
+  const r = replay(id, user.id);
+  if (!r.ok) return res.status(404).json(r);
+  try {
+    const buf = await makeReplayVideo(r.actions || []);
+    fs.mkdirSync(VIDEO_DIR, { recursive: true });
+    fs.writeFileSync(cached, buf);
+    sweepVideos();
+    res.setHeader("Content-Type", "video/webm");
+    res.setHeader("Content-Disposition", `attachment; filename="uno-replay-${id}.webm"`);
+    res.send(buf);
+  } catch (e) {
+    console.error("replay video failed:", e);
+    res.status(500).json({ error: "视频生成失败" });
+  }
 });
 app.patch("/api/profile", (req, res) => {
   const user = authFromRequest(req);
@@ -670,7 +714,11 @@ io.on("connection", (socket) => {
     if (!room.players.some(p => p.id === socket.id)) return cb?.({ ok: false, error: "你不在此房间中" });
     if (room.players.length >= MAX_PLAYERS) return cb?.({ ok: false, error: "房间已满" });
     touch(room);
-    room.players.push({ id: `bot:${++botSeq}`, name: `机器人 ${botSeq}`, clientId: null, userId: null, username: null, disconnectedAt: null, bot: true });
+    // 编号按房间内空闲最小号，避免全局累加出现"机器人 4/5/6"
+    const used = new Set(room.players.map(p => p.name));
+    let n = 1;
+    while (used.has(`机器人 ${n}`)) n++;
+    room.players.push({ id: `bot:${++botSeq}`, name: `机器人 ${n}`, clientId: null, userId: null, username: null, disconnectedAt: null, bot: true });
     cb?.({ ok: true });
     broadcast(room, code);
   });

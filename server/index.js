@@ -5,6 +5,7 @@ import { newGame, playCard, drawCards, callUno, catchUno, keepDrawn, removePlaye
 import { prepareRegistration, confirmRegistration, login, getUser, logout, profile, updateNickname, recordGame, publicProfile } from "./store.js";
 
 const PORT = process.env.PORT || 3001;
+const MAX_PLAYERS = 7;   // 单房间座位上限（旁观席另限 8）
 const app = express();
 const server = http.createServer(app);
 // CORS 白名单：站点自身 + 本地开发，禁止任意来源建立 WS 连接
@@ -127,7 +128,7 @@ function seatElsewhere(userId, clientId, excludeCode) {
 function endRound(room, code) {
   room.started = false;
   room.state = null;
-  while (room.spectators?.length && room.players.length < 4) {
+  while (room.spectators?.length && room.players.length < MAX_PLAYERS) {
     room.players.push({ ...room.spectators.shift(), disconnectedAt: null });
   }
   touch(room);
@@ -162,7 +163,7 @@ setInterval(() => {
             if (room.players.length <= 1) {
               // 只剩一个玩家：结束游戏，不记战绩
               room.started = false; room.state = null;
-              while (room.spectators?.length && room.players.length < 4) room.players.push({ ...room.spectators.shift(), disconnectedAt: null });
+              while (room.spectators?.length && room.players.length < MAX_PLAYERS) room.players.push({ ...room.spectators.shift(), disconnectedAt: null });
             }
           }
         }
@@ -184,7 +185,7 @@ setInterval(() => {
           if (room.kickTargets) room.kickTargets = room.kickTargets.filter(k => k.playerId !== p.id);
           if (room.players.length <= 1) {
             room.started = false; room.state = null;
-            while (room.spectators?.length && room.players.length < 4) room.players.push({ ...room.spectators.shift(), disconnectedAt: null });
+            while (room.spectators?.length && room.players.length < MAX_PLAYERS) room.players.push({ ...room.spectators.shift(), disconnectedAt: null });
           }
         }
       }
@@ -424,7 +425,7 @@ io.on("connection", (socket) => {
       broadcast(room, upper);
       return;
     }
-    if (room.players.length >= 4) return cb?.({ ok: false, error: "房间已满" });
+    if (room.players.length >= MAX_PLAYERS) return cb?.({ ok: false, error: "房间已满" });
 
     touch(room);
     room.players.push({

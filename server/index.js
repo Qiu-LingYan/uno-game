@@ -131,7 +131,7 @@ function isBot(p) { return !!p?.bot; }
 function resetTurnTimer(room) {
   const pid = room.state && !room.state.winner ? room.state.players[room.state.turn] : null;
   const seat = room.players.find(p => p.id === pid);
-  room.turnDeadline = pid ? Date.now() + (isBot(seat) ? 0 : TURN_MS) : null;
+  room.turnDeadline = pid ? Date.now() + (isBot(seat) ? 1000 + Math.floor(Math.random() * 2000) : TURN_MS) : null;
 }
 
 // 座位匹配：登录用户按 userId，匿名玩家按 clientId（前端持久化，刷新不丢状态）
@@ -378,7 +378,9 @@ function broadcast(room, code) {
   const offlineIds = room.players.filter(p => p.disconnectedAt).map(p => p.id);
   const botIds = room.players.filter(p => p.bot).map(p => p.id);
   const kicks = (room.kickTargets || []).map(k => ({ playerId: k.playerId, until: k.until }));
-  const turnEndsAt = room.started && room.state && !room.state.winner ? room.turnDeadline || null : null;
+  const curSeat = room.started && room.state && !room.state.winner ? room.players.find(p => p.id === room.state.players[room.state.turn]) : null;
+  // 真人回合才显示倒计时；bot 回合不显示（前端等待即可）
+  const turnEndsAt = room.started && room.state && !room.state.winner && !isBot(curSeat) ? room.turnDeadline || null : null;
   const roundSeconds = room.started && room.state?.winner && room.startedAt ? Math.max(1, Math.round((Date.now() - room.startedAt) / 1000)) : null;
   const base = { room: code, players: room.players.map(x => x.name), roster, spectatorNames, offlineIds, kicks, botIds, botNames: room.players.filter(p => p.bot).map(p => p.name), turnEndsAt, started: room.started, names, roundSeconds, unoCatches: room.started ? (room.unoCatches || 0) : 0 };
   for (const p of room.players) {

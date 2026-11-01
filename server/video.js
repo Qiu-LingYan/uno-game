@@ -5,7 +5,7 @@ let sharp = null;
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
-const W = 480, H = 720, FRAME_MS = 900;
+const W = 720, H = 1080, FRAME_MS = 900;
 const FONT = "Droid Sans Fallback, DejaVu Sans, sans-serif";
 const COLORS = { red: "#e64545", yellow: "#f2c14e", green: "#3aa76d", blue: "#4a7fe0", wild: "#7a5cd6" };
 const COLOR_CN = { red: "红色", yellow: "黄色", green: "绿色", blue: "蓝色" };
@@ -93,7 +93,7 @@ export async function makeReplayVideo(actions) {
     const ff = spawn(ffmpegPath, [
       "-hide_banner", "-loglevel", "error", "-y",
       "-f", "image2pipe", "-framerate", String(1000 / FRAME_MS), "-i", "-",
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+      "-c:v", "libx264", "-preset", "faster", "-crf", "23",
       "-pix_fmt", "yuv420p", "-movflags", "+faststart",
       tmpOut,
     ]);
